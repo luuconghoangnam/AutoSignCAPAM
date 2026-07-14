@@ -16,3 +16,35 @@ venv/
 capam_full_scr.png
 gp_crop.png
 screenshot_current.png
+
+# Settings file (chứa thông tin người dùng)
+*.json
+~/.capam_autosign_settings.json
+
+# Venv
+venv/
+
+# Pycache
+__pycache__/
+*.pyc
+*.pyo
+
+# Scratch / debug scripts
+scratch/
+
+# Debug tools (không cần cho end-user)
+dump_contours.py
+detect_fields.py
+find_gp_inputs.py
+find_gp_window.py
+gp_state_detector.py
+list_tray_items.py
+activate_gp_ui.py
+take_screenshot.py
+test_*.py
+verify_templates.py
+crop_templates.py
+investigation_report.md
+
+# Old screenshots
+ca_window.png

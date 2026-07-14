@@ -170,7 +170,7 @@ def get_os_adapter():
     return LinuxAdapter()
 
 # Cấu hình hằng số
-CAPAM_IP = "10.64.213.188"
+CAPAM_IP = ""  # Cấu hình IP máy chủ CAPAM tại đây hoặc nhập trong giao diện
 
 # -- LỚP XỬ LÝ TỰ ĐỘNG HÓA CHẠY NGẦM --
 class AutomationWorker(QThread):
@@ -812,7 +812,7 @@ class MainWindow(QMainWindow):
         v_user = QVBoxLayout()
         v_user.addWidget(QLabel("Tài khoản (Username):"))
         self.txt_username = QLineEdit()
-        self.txt_username.setText("vnanh.sp")
+        self.txt_username.setText("")  # Để trống, người dùng tự nhập
         v_user.addWidget(self.txt_username)
         
         v_pass = QVBoxLayout()
@@ -827,7 +827,7 @@ class MainWindow(QMainWindow):
         v_pass.addLayout(h_pass_head)
         self.txt_pass_prefix = QLineEdit()
         self.txt_pass_prefix.setEchoMode(QLineEdit.Password)
-        self.txt_pass_prefix.setText("Aa0974702766")
+        self.txt_pass_prefix.setText("")  # Để trống, người dùng tự nhập
         v_pass.addWidget(self.txt_pass_prefix)
         
         cred_layout.addLayout(v_user)
