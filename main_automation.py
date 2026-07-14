@@ -226,7 +226,7 @@ class AutomationWorker(QThread):
         self.log("Đang phân tích và quét tìm TẤT CẢ các nút RDP trên màn hình...")
         result = cv2.matchTemplate(scene, template, cv2.TM_CCOEFF_NORMED)
         
-        threshold = 0.8
+        threshold = 0.65
         locations = np.where(result >= threshold)
         
         # Nhóm các điểm gần nhau theo trục Y (khoảng cách < 10px thì coi là cùng 1 nút)
