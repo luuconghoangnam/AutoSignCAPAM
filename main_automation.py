@@ -10,6 +10,7 @@ import os
 import platform
 import shutil
 import json
+import gc
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                              QRadioButton, QButtonGroup, QTextEdit, QFrame, QCheckBox)
@@ -232,9 +233,16 @@ class AutomationWorker(QThread):
             click_y = y + 20
             self.log(f"Đã tìm thấy thiết bị ở tọa độ {max_loc}. Sắp click RDP tại ({click_x}, {click_y})")
             pyautogui.click(click_x, click_y)
+            
+            # Giải phóng RAM ngay lập tức
+            del scene, template, result
+            gc.collect()
+            
             return True
         else:
             self.log(f"Không tìm thấy thiết bị trên màn hình. Độ chính xác cao nhất: {max_val:.2f}")
+            del scene, template, result
+            gc.collect()
             return False
 
     def detect_gp_fields(self, rect):
@@ -580,10 +588,14 @@ class AutomationWorker(QThread):
             if not rdp_success:
                 self.log("Lỗi: Quá thời gian chờ (10s) mà không định vị được thiết bị trên màn hình.")
                 self.finished_signal.emit()
+                gc.collect()
                 return
             
         self.log("==> KỊCH BẢN TỰ ĐỘNG HÓA HOÀN TẤT! <==")
         self.finished_signal.emit()
+        
+        # Dọn dẹp toàn bộ bộ nhớ còn sót lại
+        gc.collect()
 
 # -- GIAO DIỆN CHÍNH (PYQT5) --
 class MainWindow(QMainWindow):
