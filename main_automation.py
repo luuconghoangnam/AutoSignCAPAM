@@ -188,6 +188,72 @@ class AutomationWorker(QThread):
     def log(self, message):
         self.log_signal.emit(f"[*] {message}")
 
+    def fill_windows_security_dialog(self):
+        """Điền thông tin đăng nhập vào bảng Windows Security sau khi click RDP."""
+        WIN_SEC_TITLE = "Windows Security"
+        self.log("Đang chờ bảng Windows Security xuất hiện...")
+        
+        rect = None
+        for attempt in range(20):
+            rect = self.os_tool.get_window_rect(WIN_SEC_TITLE)
+            if rect:
+                self.log(f"Đã phát hiện bảng Windows Security sau {attempt} giây.")
+                break
+            time.sleep(1)
+            
+        if not rect:
+            self.log("Không tìm thấy bảng Windows Security trong 20 giây. Bỏ qua bước này.")
+            return False
+            
+        time.sleep(0.5)
+        self.os_tool.focus_window(WIN_SEC_TITLE)
+        time.sleep(0.5)
+        
+        # Chụp ảnh để phát hiện các ô nhập liệu trong bảng Windows Security
+        fields = []
+        for attempt in range(10):
+            fields = self.detect_capam_fields(rect)
+            if len(fields) >= 2:
+                break
+            self.log(f"Đang chờ ô nhập liệu của Windows Security... (Lần {attempt+1}/10)")
+            time.sleep(0.5)
+            
+        self.log(f"Windows Security: Phát hiện thấy {len(fields)} ô nhập liệu.")
+        
+        if len(fields) < 2:
+            self.log("Không đủ ô nhập liệu trong bảng Windows Security.")
+            return False
+            
+        # Ô đầu tiên: User name, ô thứ hai: Password (sắp xếp theo Y từ trên xuống)
+        x0, y0, w0, h0 = fields[0]  # User name
+        x1, y1, w1, h1 = fields[1]  # Password
+        
+        # Nhập User name
+        click_x0 = rect['x'] + x0 + w0 // 2
+        click_y0 = rect['y'] + y0 + h0 // 2
+        pyautogui.click(click_x0, click_y0)
+        time.sleep(0.15)
+        pyautogui.hotkey('ctrl', 'a')
+        time.sleep(0.1)
+        pyautogui.write(self.username, interval=0.04)
+        self.log(f"Đã nhập User name: {self.username}")
+        
+        # Nhập Password (password_prefix là mật khẩu đầy đủ ở bước này, không cần OTP)
+        click_x1 = rect['x'] + x1 + w1 // 2
+        click_y1 = rect['y'] + y1 + h1 // 2
+        pyautogui.click(click_x1, click_y1)
+        time.sleep(0.15)
+        pyautogui.hotkey('ctrl', 'a')
+        time.sleep(0.1)
+        pyautogui.write(self.password_prefix, interval=0.04)
+        self.log("Đã nhập Password.")
+        
+        # Nhấn Login bằng Tab + Enter hoặc Enter trực tiếp
+        time.sleep(0.3)
+        pyautogui.press('enter')
+        self.log("Đã nhấn Login — kết nối RDP đang được thiết lập!")
+        return True
+
     def wait_for_network(self, host, port, timeout=30):
         start_time = time.time()
         while time.time() - start_time < timeout:
@@ -338,8 +404,8 @@ class AutomationWorker(QThread):
         fields = []
         for c in contours:
             x, y, w, h = cv2.boundingRect(c)
-            # CAPAM input field dimensions
-            if 100 <= w <= 200 and 12 <= h <= 35:
+            # Input field dimensions (covers CAPAM login + Windows Security dialog)
+            if 80 <= w <= 280 and 12 <= h <= 40:
                 fields.append((x, y, w, h))
         return sorted(fields, key=lambda f: f[1])
 
@@ -641,6 +707,9 @@ class AutomationWorker(QThread):
                 self.finished_signal.emit(False)
                 gc.collect()
                 return
+            
+            # --- BƯỚC 5: ĐIỀN THÔNG TIN VÀO BẢNG WINDOWS SECURITY ---
+            self.fill_windows_security_dialog()
             
         self.log("==> KỊCH BẢN TỰ ĐỘNG HÓA HOÀN TẤT! <==")
         self.finished_signal.emit(True)
