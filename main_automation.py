@@ -175,7 +175,7 @@ CAPAM_IP = "10.64.213.188"
 # -- LỚP XỬ LÝ TỰ ĐỘNG HÓA CHẠY NGẦM --
 class AutomationWorker(QThread):
     log_signal = pyqtSignal(str)
-    finished_signal = pyqtSignal()
+    finished_signal = pyqtSignal(bool)
 
     def __init__(self, username, password_prefix, otp, server_choice):
         super().__init__()
@@ -439,7 +439,7 @@ class AutomationWorker(QThread):
                         
             if not gp_success and not self.wait_for_network(CAPAM_IP, 443, timeout=5):
                 self.log("Quá thời gian kết nối VPN. Đăng nhập GP thất bại.")
-                self.finished_signal.emit()
+                self.finished_signal.emit(False)
                 return
                 
             self.log("Đăng nhập GlobalProtect thành công, VPN đã thông!")
@@ -461,7 +461,7 @@ class AutomationWorker(QThread):
             
         if not rect_capam:
             self.log("Không tìm thấy cửa sổ CAPAM Client.")
-            self.finished_signal.emit()
+            self.finished_signal.emit(False)
             return
             
         time.sleep(1.5) # Chờ ứng dụng render xong
@@ -472,7 +472,7 @@ class AutomationWorker(QThread):
         rect_capam = self.os_tool.get_window_rect("Symantec Privileged Access Manager")
         if not rect_capam:
             self.log("Không tìm thấy cửa sổ CAPAM để nhập IP.")
-            self.finished_signal.emit()
+            self.finished_signal.emit(False)
             return
             
         fields = self.detect_capam_fields(rect_capam)
@@ -499,7 +499,7 @@ class AutomationWorker(QThread):
             self.os_tool.focus_window("Symantec Privileged Access Manager")
         else:
             self.log("Không phát hiện được ô nhập IP nào trên CAPAM.")
-            self.finished_signal.emit()
+            self.finished_signal.emit(False)
             return
 
         # --- BƯỚC 3B: ĐIỀN THÔNG TIN ĐĂNG NHẬP (USER/PASS) ---
@@ -507,7 +507,7 @@ class AutomationWorker(QThread):
         rect_capam = self.os_tool.get_window_rect("Symantec Privileged Access Manager")
         if not rect_capam:
             self.log("Không tìm thấy cửa sổ CAPAM để nhập tài khoản.")
-            self.finished_signal.emit()
+            self.finished_signal.emit(False)
             return
             
         fields = self.detect_capam_fields(rect_capam)
@@ -545,7 +545,7 @@ class AutomationWorker(QThread):
             self.log("Đã gửi thông tin đăng nhập CAPAM.")
         else:
             self.log("Lỗi: Không tìm thấy đủ 2 ô nhập tài khoản/mật khẩu trên màn hình đăng nhập CAPAM.")
-            self.finished_signal.emit()
+            self.finished_signal.emit(False)
             return
             
         # --- BƯỚC 4: CHỌN MÁY CHỦ ---
@@ -565,7 +565,7 @@ class AutomationWorker(QThread):
                 
             if not device_window_rect:
                 self.log("Quá thời gian: Không tìm thấy cửa sổ danh sách thiết bị CAPAM Client.")
-                self.finished_signal.emit()
+                self.finished_signal.emit(False)
                 return
                 
             time.sleep(1.5) # Chờ danh sách thiết bị render đầy đủ
@@ -587,12 +587,12 @@ class AutomationWorker(QThread):
                 
             if not rdp_success:
                 self.log("Lỗi: Quá thời gian chờ (10s) mà không định vị được thiết bị trên màn hình.")
-                self.finished_signal.emit()
+                self.finished_signal.emit(False)
                 gc.collect()
                 return
             
         self.log("==> KỊCH BẢN TỰ ĐỘNG HÓA HOÀN TẤT! <==")
-        self.finished_signal.emit()
+        self.finished_signal.emit(True)
         
         # Dọn dẹp toàn bộ bộ nhớ còn sót lại
         gc.collect()
@@ -744,7 +744,13 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.rb_12)
         main_layout.addWidget(self.rb_none)
         
-        # 3. Action Buttons Layout
+        # 3. Auto Exit Checkbox
+        self.chk_auto_exit = QCheckBox("Tự động đóng ứng dụng sau khi Đăng nhập thành công")
+        self.chk_auto_exit.setStyleSheet("QCheckBox { margin-top: 5px; margin-bottom: 5px; color: #a6e3a1; font-weight: bold; }")
+        self.chk_auto_exit.setChecked(True)
+        main_layout.addWidget(self.chk_auto_exit)
+        
+        # 4. Action Buttons Layout
         btn_layout = QHBoxLayout()
         self.btn_run = QPushButton("TIẾN HÀNH ĐĂNG NHẬP")
         self.btn_run.clicked.connect(self.start_automation)
@@ -785,6 +791,8 @@ class MainWindow(QMainWindow):
                         self.txt_username.setText(data["username"])
                     if "password_prefix" in data:
                         self.txt_pass_prefix.setText(data["password_prefix"])
+                    if "auto_exit" in data:
+                        self.chk_auto_exit.setChecked(data["auto_exit"])
             except Exception:
                 pass
 
@@ -792,7 +800,8 @@ class MainWindow(QMainWindow):
         try:
             data = {
                 "username": self.txt_username.text().strip(),
-                "password_prefix": self.txt_pass_prefix.text().strip()
+                "password_prefix": self.txt_pass_prefix.text().strip(),
+                "auto_exit": self.chk_auto_exit.isChecked()
             }
             with open(self.settings_file, "w", encoding="utf-8") as f:
                 json.dump(data, f)
@@ -829,6 +838,7 @@ class MainWindow(QMainWindow):
         self.rb_12.setEnabled(False)
         self.rb_none.setEnabled(False)
         self.chk_show_pass.setEnabled(False)
+        self.chk_auto_exit.setEnabled(False)
         
         self.save_settings()
         
@@ -846,9 +856,14 @@ class MainWindow(QMainWindow):
             self.worker.terminate()
             self.worker.wait()
             self.log("[!] Đã dừng thành công kịch bản tự động hóa.")
-        self.automation_finished()
+        self.automation_finished(False)
 
-    def automation_finished(self):
+    def automation_finished(self, success=False):
+        if success and self.chk_auto_exit.isChecked():
+            self.log("[INFO] Tự động đóng ứng dụng theo cài đặt...")
+            QApplication.quit()
+            return
+            
         self.btn_run.setEnabled(True)
         self.btn_cancel.setEnabled(False)
         self.txt_username.setEnabled(True)
@@ -859,6 +874,7 @@ class MainWindow(QMainWindow):
         self.rb_12.setEnabled(True)
         self.rb_none.setEnabled(True)
         self.chk_show_pass.setEnabled(True)
+        self.chk_auto_exit.setEnabled(True)
         self.txt_otp.setFocus()
 
 # Khởi chạy ứng dụng PyQt5
