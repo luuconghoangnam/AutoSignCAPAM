@@ -606,7 +606,7 @@ class MainWindow(QMainWindow):
     def initUI(self):
         self.settings_file = os.path.expanduser("~/.capam_autosign_settings.json")
         self.setWindowTitle('CAPAM Auto-Sign In Tool (Kubuntu Edition)')
-        self.setFixedSize(500, 560)
+        self.setFixedSize(500, 620)
         
         # Style đậm chất Catppuccin Mocha
         self.setStyleSheet("""
@@ -623,13 +623,15 @@ class MainWindow(QMainWindow):
                 color: #89b4fa;
                 border: 2px solid #45475a;
                 border-radius: 8px;
-                padding: 5px;
+                padding: 6px;
                 font-size: 14px;
                 font-weight: bold;
+                min-height: 25px;
             }
             QLineEdit#otp_input {
                 font-size: 24px;
                 letter-spacing: 5px;
+                min-height: 40px;
             }
             QLineEdit:focus {
                 border: 2px solid #89b4fa;
