@@ -724,6 +724,135 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.initUI()
         
+    def initUI(self):
+        self.settings_file = os.path.expanduser("~/.capam_autosign_settings.json")
+        self.setWindowTitle('CAPAM Auto-Sign In Tool (Kubuntu Edition)')
+        self.setFixedSize(480, 530)
+
+        self.setStyleSheet("""
+            QMainWindow { background-color: #1e1e2e; }
+            QLabel { color: #cdd6f4; font-size: 12px; font-weight: bold; }
+            QLineEdit {
+                background-color: #313244; color: #89b4fa;
+                border: 2px solid #45475a; border-radius: 6px;
+                padding: 4px 6px; font-size: 13px; font-weight: bold; min-height: 22px;
+            }
+            QLineEdit#otp_input { font-size: 22px; letter-spacing: 5px; min-height: 36px; }
+            QLineEdit:focus { border: 2px solid #89b4fa; }
+            QRadioButton { color: #cdd6f4; font-size: 12px; spacing: 6px; }
+            QRadioButton::indicator { width: 14px; height: 14px; }
+            QPushButton {
+                background-color: #89b4fa; color: #1e1e2e;
+                font-size: 13px; font-weight: bold; border-radius: 6px; padding: 7px;
+            }
+            QPushButton:hover { background-color: #b4befe; }
+            QPushButton:disabled { background-color: #45475a; color: #a6adc8; }
+            QPushButton#btn_cancel { background-color: #f38ba8; color: #1e1e2e; }
+            QPushButton#btn_cancel:hover { background-color: #eba0ac; }
+            QPushButton#btn_cancel:disabled { background-color: #45475a; color: #a6adc8; }
+            QCheckBox { color: #a6adc8; font-size: 12px; }
+            QTextEdit {
+                background-color: #11111b; color: #a6e3a1;
+                border: 1px solid #45475a; border-radius: 4px;
+                font-family: 'Monospace'; font-size: 11px;
+            }
+        """)
+
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(16, 14, 16, 14)
+
+        # --- Hàng 1: Username | Password | IP ---
+        row1 = QHBoxLayout()
+        row1.setSpacing(8)
+
+        v_user = QVBoxLayout()
+        v_user.setSpacing(3)
+        v_user.addWidget(QLabel("Tài khoản:"))
+        self.txt_username = QLineEdit()
+        self.txt_username.setPlaceholderText("username")
+        v_user.addWidget(self.txt_username)
+
+        v_pass = QVBoxLayout()
+        v_pass.setSpacing(3)
+        h_pass_lbl = QHBoxLayout()
+        h_pass_lbl.addWidget(QLabel("Mật khẩu:"))
+        self.chk_show_pass = QCheckBox("Hiện")
+        self.chk_show_pass.stateChanged.connect(self.toggle_password)
+        h_pass_lbl.addWidget(self.chk_show_pass)
+        h_pass_lbl.addStretch()
+        v_pass.addLayout(h_pass_lbl)
+        self.txt_pass_prefix = QLineEdit()
+        self.txt_pass_prefix.setEchoMode(QLineEdit.Password)
+        self.txt_pass_prefix.setPlaceholderText("mật khẩu")
+        v_pass.addWidget(self.txt_pass_prefix)
+
+        v_ip = QVBoxLayout()
+        v_ip.setSpacing(3)
+        v_ip.addWidget(QLabel("IP CAPAM:"))
+        self.txt_capam_ip = QLineEdit()
+        self.txt_capam_ip.setText(CAPAM_IP_DEFAULT)
+        self.txt_capam_ip.setPlaceholderText("10.x.x.x")
+        v_ip.addWidget(self.txt_capam_ip)
+
+        row1.addLayout(v_user, 3)
+        row1.addLayout(v_pass, 3)
+        row1.addLayout(v_ip, 2)
+        main_layout.addLayout(row1)
+
+        # --- OTP ---
+        main_layout.addWidget(QLabel("Nhập mã OTP (6 chữ số) rồi nhấn Enter:"))
+        self.txt_otp = QLineEdit()
+        self.txt_otp.setObjectName("otp_input")
+        self.txt_otp.setMaxLength(6)
+        self.txt_otp.setAlignment(Qt.AlignCenter)
+        self.txt_otp.setPlaceholderText("______")
+        self.txt_otp.returnPressed.connect(self.start_automation)
+        main_layout.addWidget(self.txt_otp)
+
+        # --- Chọn máy ---
+        main_layout.addWidget(QLabel("Kết nối máy chủ sau khi đăng nhập:"))
+        self.bg_server = QButtonGroup()
+        rb_row = QHBoxLayout()
+        rb_row.setSpacing(12)
+        self.rb_200  = QRadioButton("RDP-211.200")
+        self.rb_12   = QRadioButton("Terminal-211.12")
+        self.rb_none = QRadioButton("Chỉ đăng nhập")
+        self.rb_200.setChecked(True)
+        for rb in [self.rb_200, self.rb_12, self.rb_none]:
+            self.bg_server.addButton(rb)
+            rb_row.addWidget(rb)
+        rb_row.addStretch()
+        main_layout.addLayout(rb_row)
+
+        # --- Auto-exit ---
+        self.chk_auto_exit = QCheckBox("Tự động đóng sau khi đăng nhập thành công")
+        self.chk_auto_exit.setChecked(True)
+        main_layout.addWidget(self.chk_auto_exit)
+
+        # --- Nút bấm ---
+        btn_layout = QHBoxLayout()
+        self.btn_run = QPushButton("TIẾN HÀNH ĐĂNG NHẬP")
+        self.btn_run.clicked.connect(self.start_automation)
+        self.btn_cancel = QPushButton("HỦY")
+        self.btn_cancel.setObjectName("btn_cancel")
+        self.btn_cancel.setEnabled(False)
+        self.btn_cancel.clicked.connect(self.cancel_automation)
+        btn_layout.addWidget(self.btn_run, 3)
+        btn_layout.addWidget(self.btn_cancel, 1)
+        main_layout.addLayout(btn_layout)
+
+        # --- Logs ---
+        main_layout.addWidget(QLabel("Nhật ký thực thi:"))
+        self.txt_logs = QTextEdit()
+        self.txt_logs.setReadOnly(True)
+        main_layout.addWidget(self.txt_logs)
+
+        self.worker = None
+        self.load_settings()
+
     def toggle_password(self):
         if self.chk_show_pass.isChecked():
             self.txt_pass_prefix.setEchoMode(QLineEdit.Normal)
