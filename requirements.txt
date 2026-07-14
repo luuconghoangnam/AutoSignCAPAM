@@ -1,0 +1,9 @@
+pyqt5
+pyautogui
+opencv-python-headless
+numpy
+pyperclip
+pygetwindow; sys_platform == 'win32'
+pillow; sys_platform == 'win32'
+dbus-python; sys_platform == 'linux'
+pyinstaller
