@@ -9,9 +9,10 @@ import pyperclip
 import os
 import platform
 import shutil
+import json
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, 
-                             QRadioButton, QButtonGroup, QTextEdit, QFrame)
+                             QRadioButton, QButtonGroup, QTextEdit, QFrame, QCheckBox)
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 from PyQt5.QtGui import QFont, QIcon, QColor, QPalette
 
@@ -591,8 +592,9 @@ class MainWindow(QMainWindow):
         self.initUI()
         
     def initUI(self):
+        self.settings_file = os.path.expanduser("~/.capam_autosign_settings.json")
         self.setWindowTitle('CAPAM Auto-Sign In Tool (Kubuntu Edition)')
-        self.setFixedSize(500, 550)
+        self.setFixedSize(500, 560)
         
         # Style đậm chất Catppuccin Mocha
         self.setStyleSheet("""
@@ -680,7 +682,15 @@ class MainWindow(QMainWindow):
         v_user.addWidget(self.txt_username)
         
         v_pass = QVBoxLayout()
-        v_pass.addWidget(QLabel("Tiền tố Mật khẩu:"))
+        h_pass_head = QHBoxLayout()
+        h_pass_head.addWidget(QLabel("Tiền tố Mật khẩu:"))
+        self.chk_show_pass = QCheckBox("Hiện")
+        self.chk_show_pass.setStyleSheet("QCheckBox { color: #a6adc8; font-size: 12px; }")
+        self.chk_show_pass.stateChanged.connect(self.toggle_password)
+        h_pass_head.addWidget(self.chk_show_pass)
+        h_pass_head.addStretch()
+        
+        v_pass.addLayout(h_pass_head)
         self.txt_pass_prefix = QLineEdit()
         self.txt_pass_prefix.setEchoMode(QLineEdit.Password)
         self.txt_pass_prefix.setText("Aa0974702766")
@@ -746,6 +756,36 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.txt_logs)
 
         self.worker = None
+        self.load_settings()
+
+    def toggle_password(self):
+        if self.chk_show_pass.isChecked():
+            self.txt_pass_prefix.setEchoMode(QLineEdit.Normal)
+        else:
+            self.txt_pass_prefix.setEchoMode(QLineEdit.Password)
+
+    def load_settings(self):
+        if os.path.exists(self.settings_file):
+            try:
+                with open(self.settings_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if "username" in data:
+                        self.txt_username.setText(data["username"])
+                    if "password_prefix" in data:
+                        self.txt_pass_prefix.setText(data["password_prefix"])
+            except Exception:
+                pass
+
+    def save_settings(self):
+        try:
+            data = {
+                "username": self.txt_username.text().strip(),
+                "password_prefix": self.txt_pass_prefix.text().strip()
+            }
+            with open(self.settings_file, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+        except Exception:
+            pass
 
     def log(self, text):
         self.txt_logs.append(text)
@@ -776,6 +816,9 @@ class MainWindow(QMainWindow):
         self.rb_200.setEnabled(False)
         self.rb_12.setEnabled(False)
         self.rb_none.setEnabled(False)
+        self.chk_show_pass.setEnabled(False)
+        
+        self.save_settings()
         
         self.txt_logs.clear()
         self.log("[INFO] Bắt đầu khởi chạy kịch bản tự động hóa...")
@@ -803,6 +846,7 @@ class MainWindow(QMainWindow):
         self.rb_200.setEnabled(True)
         self.rb_12.setEnabled(True)
         self.rb_none.setEnabled(True)
+        self.chk_show_pass.setEnabled(True)
         self.txt_otp.setFocus()
 
 # Khởi chạy ứng dụng PyQt5
