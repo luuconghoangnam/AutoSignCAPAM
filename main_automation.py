@@ -200,10 +200,10 @@ class AutomationWorker(QThread):
                 time.sleep(1)
         return False
 
-    def find_and_click_rdp(self, template_file):
+    def find_and_click_rdp(self):
         screenshot_path = os.path.join(os.environ.get('TEMP', '/tmp'), "capam_full_scr.png")
         
-        self.log("Đang chụp ảnh màn hình...")
+        self.log("Đang chụp ảnh màn hình để tìm nút RDP...")
         try:
             self.os_tool.take_full_screenshot(screenshot_path)
         except Exception as e:
@@ -217,33 +217,52 @@ class AutomationWorker(QThread):
             except Exception:
                 pass
                 
-        template = cv2.imread(get_resource_path(f"templates/{template_file}"))
+        template = cv2.imread(get_resource_path("template_rdp.png"))
         
         if scene is None or template is None:
-            self.log(f"Không thể tải ảnh chụp hoặc template {template_file}.")
+            self.log("Không thể tải ảnh chụp hoặc template RDP.")
             return False
             
-        self.log(f"Đang thực hiện so khớp ảnh với mẫu {template_file}...")
+        self.log("Đang phân tích và quét tìm TẤT CẢ các nút RDP trên màn hình...")
         result = cv2.matchTemplate(scene, template, cv2.TM_CCOEFF_NORMED)
-        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
         
-        if max_val > 0.8:
-            x, y = max_loc
-            click_x = x + 280
-            click_y = y + 20
-            self.log(f"Đã tìm thấy thiết bị ở tọa độ {max_loc}. Sắp click RDP tại ({click_x}, {click_y})")
-            pyautogui.click(click_x, click_y)
+        threshold = 0.8
+        locations = np.where(result >= threshold)
+        
+        # Nhóm các điểm gần nhau theo trục Y (khoảng cách < 10px thì coi là cùng 1 nút)
+        y_coords = []
+        for pt in zip(*locations[::-1]): # pt is (x, y)
+            if not any(abs(pt[1] - existing_pt[1]) < 10 for existing_pt in y_coords):
+                y_coords.append(pt)
+                
+        # Sắp xếp các nút RDP từ trên xuống dưới
+        y_coords.sort(key=lambda p: p[1])
+        
+        # Giải phóng RAM ngay
+        del scene, template, result
+        gc.collect()
+        
+        if len(y_coords) > 0:
+            self.log(f"Phát hiện tổng cộng {len(y_coords)} nút RDP.")
             
-            # Giải phóng RAM ngay lập tức
-            del scene, template, result
-            gc.collect()
-            
-            return True
-        else:
-            self.log(f"Không tìm thấy thiết bị trên màn hình. Độ chính xác cao nhất: {max_val:.2f}")
-            del scene, template, result
-            gc.collect()
-            return False
+            # Phân tích thông minh: Dựa theo danh sách CAPAM, DRM là số 1, RDP-200 là số 2, Terminal-12 là số 3
+            target_pt = None
+            if self.server_choice == "200":
+                target_pt = y_coords[1] if len(y_coords) >= 2 else y_coords[-1]
+                self.log("Đã chọn tự động Máy RDP-200 (Nút RDP số 2 từ trên xuống)")
+            elif self.server_choice == "12":
+                target_pt = y_coords[2] if len(y_coords) >= 3 else y_coords[-1]
+                self.log("Đã chọn tự động Máy Terminal-12 (Nút RDP số 3 từ trên xuống)")
+                
+            if target_pt:
+                click_x = target_pt[0] + 15  # Tọa độ tâm của nút
+                click_y = target_pt[1] + 15
+                self.log(f"Sắp click kết nối RDP tại tọa độ màn hình ({click_x}, {click_y})")
+                pyautogui.click(click_x, click_y)
+                return True
+                
+        self.log("Không tìm thấy đủ số lượng nút RDP trên màn hình. Đang chờ tải...")
+        return False
 
     def detect_gp_fields(self, rect):
         screenshot_path = os.path.join(os.environ.get('TEMP', '/tmp'), "gp_crop.png")
@@ -573,20 +592,20 @@ class AutomationWorker(QThread):
             self.os_tool.focus_window(target_title)
             time.sleep(0.5)
             
-            template_name = "template_200.png" if self.server_choice == "200" else "template_12.png"
-            self.log(f"Bắt đầu tìm kiếm thiết bị bằng mẫu {template_name}...")
+            self.log("Bắt đầu phân tích thông minh danh sách thiết bị...")
             
             rdp_success = False
-            for match_attempt in range(10): # Thử tối đa 10 lần trong 10 giây
-                if self.find_and_click_rdp(template_name):
+            # Nới lỏng thời gian chờ lên 30 giây (30 lần lặp) vì CAPAM đôi khi tải rất chậm
+            for match_attempt in range(30): 
+                if self.find_and_click_rdp():
                     self.log("Đã click chọn kết nối RDP máy chủ thành công!")
                     rdp_success = True
                     break
-                self.log(f"Chưa tìm thấy mẫu {template_name} trên màn hình. Thử lại sau 1 giây... (Lần {match_attempt+1}/10)")
+                self.log(f"Đang chờ CAPAM load xong các nút RDP... (Lần {match_attempt+1}/30)")
                 time.sleep(1)
                 
             if not rdp_success:
-                self.log("Lỗi: Quá thời gian chờ (10s) mà không định vị được thiết bị trên màn hình.")
+                self.log("Lỗi: Quá thời gian chờ (30s) mà CAPAM vẫn chưa tải xong danh sách máy.")
                 self.finished_signal.emit(False)
                 gc.collect()
                 return
