@@ -168,8 +168,6 @@ def get_os_adapter():
     return LinuxAdapter()
 
 # Cấu hình hằng số
-GP_PASSWORD_PREFIX = "Aa0974702766"
-GP_USERNAME = "vnanh.sp"
 CAPAM_IP = "10.64.213.188"
 
 # -- LỚP XỬ LÝ TỰ ĐỘNG HÓA CHẠY NGẦM --
@@ -177,8 +175,10 @@ class AutomationWorker(QThread):
     log_signal = pyqtSignal(str)
     finished_signal = pyqtSignal()
 
-    def __init__(self, otp, server_choice):
+    def __init__(self, username, password_prefix, otp, server_choice):
         super().__init__()
+        self.username = username
+        self.password_prefix = password_prefix
         self.otp = otp
         self.server_choice = server_choice # "200", "12", or "none"
         self.os_tool = get_os_adapter()
@@ -396,7 +396,7 @@ class AutomationWorker(QThread):
                     time.sleep(0.1)
                     pyautogui.press('backspace')
                     time.sleep(0.1)
-                    pyautogui.write(GP_USERNAME, interval=0.03)
+                    pyautogui.write(self.username, interval=0.03)
                     time.sleep(0.1)
                     
                     # Điền Password + OTP: Tọa độ tương đối an toàn Center X = 150, Center Y = 277
@@ -408,7 +408,7 @@ class AutomationWorker(QThread):
                     time.sleep(0.1)
                     pyautogui.press('backspace')
                     time.sleep(0.1)
-                    pyautogui.write(GP_PASSWORD_PREFIX + self.otp, interval=0.03)
+                    pyautogui.write(self.password_prefix + self.otp, interval=0.03)
                     time.sleep(0.1)
                     
                     # Đăng nhập
@@ -517,7 +517,7 @@ class AutomationWorker(QThread):
             time.sleep(0.1)
             pyautogui.press('backspace')
             time.sleep(0.1)
-            pyautogui.write(GP_USERNAME, interval=0.03)
+            pyautogui.write(self.username, interval=0.03)
             time.sleep(0.1)
             
             # Password + OTP
@@ -529,7 +529,7 @@ class AutomationWorker(QThread):
             time.sleep(0.1)
             pyautogui.press('backspace')
             time.sleep(0.1)
-            pyautogui.write(GP_PASSWORD_PREFIX + self.otp, interval=0.03)
+            pyautogui.write(self.password_prefix + self.otp, interval=0.03)
             time.sleep(0.1)
             
             pyautogui.press('enter')
@@ -610,8 +610,11 @@ class MainWindow(QMainWindow):
                 border: 2px solid #45475a;
                 border-radius: 8px;
                 padding: 5px;
-                font-size: 24px;
+                font-size: 14px;
                 font-weight: bold;
+            }
+            QLineEdit#otp_input {
+                font-size: 24px;
                 letter-spacing: 5px;
             }
             QLineEdit:focus {
@@ -668,11 +671,32 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(15)
         main_layout.setContentsMargins(20, 20, 20, 20)
 
-        # 1. OTP Input
+        # 1. Thông tin tài khoản
+        cred_layout = QHBoxLayout()
+        v_user = QVBoxLayout()
+        v_user.addWidget(QLabel("Tài khoản (Username):"))
+        self.txt_username = QLineEdit()
+        self.txt_username.setText("vnanh.sp")
+        v_user.addWidget(self.txt_username)
+        
+        v_pass = QVBoxLayout()
+        v_pass.addWidget(QLabel("Tiền tố Mật khẩu:"))
+        self.txt_pass_prefix = QLineEdit()
+        self.txt_pass_prefix.setEchoMode(QLineEdit.Password)
+        self.txt_pass_prefix.setText("Aa0974702766")
+        v_pass.addWidget(self.txt_pass_prefix)
+        
+        cred_layout.addLayout(v_user)
+        cred_layout.addLayout(v_pass)
+        main_layout.addLayout(cred_layout)
+
+        # 2. OTP Input
         lbl_otp = QLabel("Nhập mã OTP (6 chữ số):")
+        lbl_otp.setStyleSheet("margin-top: 5px;")
         main_layout.addWidget(lbl_otp)
         
         self.txt_otp = QLineEdit()
+        self.txt_otp.setObjectName("otp_input")
         self.txt_otp.setMaxLength(6)
         self.txt_otp.setAlignment(Qt.AlignCenter)
         self.txt_otp.setPlaceholderText("______")
@@ -727,7 +751,14 @@ class MainWindow(QMainWindow):
         self.txt_logs.append(text)
 
     def start_automation(self):
+        username = self.txt_username.text().strip()
+        password_prefix = self.txt_pass_prefix.text().strip()
         otp = self.txt_otp.text().strip()
+        
+        if not username or not password_prefix:
+            self.log("[!] Vui lòng nhập đầy đủ Tài khoản và Mật khẩu.")
+            return
+
         if len(otp) != 6 or not otp.isdigit():
             self.log("[!] Vui lòng nhập đúng mã OTP 6 số.")
             self.txt_otp.setFocus()
@@ -739,6 +770,8 @@ class MainWindow(QMainWindow):
 
         self.btn_run.setEnabled(False)
         self.btn_cancel.setEnabled(True)
+        self.txt_username.setEnabled(False)
+        self.txt_pass_prefix.setEnabled(False)
         self.txt_otp.setEnabled(False)
         self.rb_200.setEnabled(False)
         self.rb_12.setEnabled(False)
@@ -747,7 +780,7 @@ class MainWindow(QMainWindow):
         self.txt_logs.clear()
         self.log("[INFO] Bắt đầu khởi chạy kịch bản tự động hóa...")
         
-        self.worker = AutomationWorker(otp, choice)
+        self.worker = AutomationWorker(username, password_prefix, otp, choice)
         self.worker.log_signal.connect(self.log)
         self.worker.finished_signal.connect(self.automation_finished)
         self.worker.start()
@@ -763,6 +796,8 @@ class MainWindow(QMainWindow):
     def automation_finished(self):
         self.btn_run.setEnabled(True)
         self.btn_cancel.setEnabled(False)
+        self.txt_username.setEnabled(True)
+        self.txt_pass_prefix.setEnabled(True)
         self.txt_otp.setEnabled(True)
         self.txt_otp.clear()
         self.rb_200.setEnabled(True)
