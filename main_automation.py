@@ -71,7 +71,7 @@ class LinuxAdapter(OSAdapter):
         subprocess.run(["pkill", "-f", "CAPAMClient"], check=False)
         
     def launch_capam(self):
-        subprocess.Popen(["/home/gone/CAPAMClient/CAPAMClient"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen([os.path.expanduser("~/CAPAMClient/CAPAMClient")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
     def launch_gp_ui(self):
         try:
