@@ -7,9 +7,7 @@ rm -rf build/ dist/ *.spec
 
 echo "Đang đóng gói ứng dụng cho Linux..."
 python3 -m PyInstaller --noconsole --onefile \
-    --add-data "template_12.png:templates" \
-    --add-data "template_200.png:templates" \
-    --add-data "template_rdp.png:templates" \
+    --add-data "template_rdp.png:." \
     --name "CAPAM_AutoSign_Linux" \
     main_automation.py
 

@@ -8,9 +8,7 @@ del /q *.spec
 
 echo Dang dong goi ung dung cho Windows...
 pyinstaller --noconsole --onefile ^
-    --add-data "template_12.png;templates" ^
-    --add-data "template_200.png;templates" ^
-    --add-data "template_rdp.png;templates" ^
+    --add-data "template_rdp.png;." ^
     --name "CAPAM_AutoSign_Windows" ^
     main_automation.py
 
