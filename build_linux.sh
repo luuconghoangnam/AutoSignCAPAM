@@ -8,6 +8,30 @@ rm -rf build/ dist/ *.spec
 echo "Đang đóng gói ứng dụng cho Linux..."
 python3 -m PyInstaller --noconsole --onefile \
     --add-data "template_rdp.png:." \
+    --exclude-module PyQt5.QtWebEngine \
+    --exclude-module PyQt5.QtWebEngineWidgets \
+    --exclude-module PyQt5.QtWebKit \
+    --exclude-module PyQt5.QtWebKitWidgets \
+    --exclude-module PyQt5.QtQml \
+    --exclude-module PyQt5.QtQuick \
+    --exclude-module PyQt5.QtSql \
+    --exclude-module PyQt5.QtXml \
+    --exclude-module PyQt5.QtTest \
+    --exclude-module PyQt5.QtSensors \
+    --exclude-module PyQt5.QtMultimedia \
+    --exclude-module PyQt5.QtMultimediaWidgets \
+    --exclude-module PyQt5.QtBluetooth \
+    --exclude-module PyQt5.QtLocation \
+    --exclude-module PyQt5.QtPositioning \
+    --exclude-module PyQt5.QtWebSockets \
+    --exclude-module PyQt5.QtDesigner \
+    --exclude-module PyQt5.QtHelp \
+    --exclude-module PyQt5.QtNetwork \
+    --exclude-module scipy \
+    --exclude-module pandas \
+    --exclude-module matplotlib \
+    --exclude-module IPython \
+    --exclude-module jinja2 \
     --name "CAPAM_AutoSign_Linux" \
     main_automation.py
 
