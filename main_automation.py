@@ -260,7 +260,7 @@ class AutomationWorker(QThread):
             rdp_h, rdp_w = shape
             rdp_center_y = pt[1] + rdp_h / 2
             dist_y = abs(rdp_center_y - dev_center_y)
-            if dist_y < 20 and dist_y < min_dist_y:
+            if dist_y < 45 and dist_y < min_dist_y:
                 min_dist_y = dist_y
                 best_rdp = (pt, shape)
                 
