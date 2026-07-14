@@ -883,6 +883,9 @@ class MainWindow(QMainWindow):
         self.txt_logs.clear()
         self.log("[INFO] Bắt đầu khởi chạy kịch bản tự động hóa...")
         
+        # Thu nhỏ cửa sổ UI chính để tránh che khuất cửa sổ CAPAM khi chụp màn hình và click RDP
+        self.showMinimized()
+        
         self.worker = AutomationWorker(username, password_prefix, otp, choice)
         self.worker.log_signal.connect(self.log)
         self.worker.finished_signal.connect(self.automation_finished)
@@ -897,6 +900,11 @@ class MainWindow(QMainWindow):
         self.automation_finished(False)
 
     def automation_finished(self, success=False):
+        # Khôi phục lại kích thước cửa sổ chính
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        
         if success and self.chk_auto_exit.isChecked():
             self.log("[INFO] Tự động đóng ứng dụng theo cài đặt...")
             QApplication.quit()
