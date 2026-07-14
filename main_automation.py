@@ -170,19 +170,20 @@ def get_os_adapter():
     return LinuxAdapter()
 
 # Cấu hình hằng số
-CAPAM_IP = ""  # Cấu hình IP máy chủ CAPAM tại đây hoặc nhập trong giao diện
+CAPAM_IP_DEFAULT = "10.64.213.188"  # IP mặc định, có thể được ghi đè bởi giá trị nhập trong giao diện
 
 # -- LỚP XỬ LÝ TỰ ĐỘNG HÓA CHẠY NGẦM --
 class AutomationWorker(QThread):
     log_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(bool)
 
-    def __init__(self, username, password_prefix, otp, server_choice):
+    def __init__(self, username, password_prefix, otp, server_choice, capam_ip):
         super().__init__()
         self.username = username
         self.password_prefix = password_prefix
         self.otp = otp
-        self.server_choice = server_choice # "200", "12", or "none"
+        self.server_choice = server_choice  # "200", "12", or "none"
+        self.capam_ip = capam_ip
         self.os_tool = get_os_adapter()
 
     def log(self, message):
@@ -440,8 +441,8 @@ class AutomationWorker(QThread):
         pyautogui.PAUSE = 0.1
         
         # --- BƯỚC 1: KIỂM TRA MẠNG TRƯỚC ---
-        self.log(f"Kiểm tra kết nối mạng tới CAPAM ({CAPAM_IP})...")
-        if self.wait_for_network(CAPAM_IP, 443, timeout=2):
+        self.log(f"Kiểm tra kết nối mạng tới CAPAM ({self.capam_ip})...")
+        if self.wait_for_network(self.capam_ip, 443, timeout=2):
             self.log("GlobalProtect đã được kết nối sẵn. Bỏ qua đăng nhập GP.")
         else:
             # --- BƯỚC 2: ĐĂNG NHẬP GLOBALPROTECT ---
@@ -528,7 +529,7 @@ class AutomationWorker(QThread):
                     
                     # Kiểm tra kết nối mạng sau đăng nhập
                     self.log("Đang chờ xác minh kết nối mạng VPN...")
-                    if self.wait_for_network(CAPAM_IP, 443, timeout=10):
+                    if self.wait_for_network(self.capam_ip, 443, timeout=10):
                         gp_success = True
                         break
                     else:
@@ -539,7 +540,7 @@ class AutomationWorker(QThread):
                     gp_success = True
                     break
                         
-            if not gp_success and not self.wait_for_network(CAPAM_IP, 443, timeout=5):
+            if not gp_success and not self.wait_for_network(self.capam_ip, 443, timeout=5):
                 self.log("Quá thời gian kết nối VPN. Đăng nhập GP thất bại.")
                 self.finished_signal.emit(False)
                 return
@@ -598,7 +599,7 @@ class AutomationWorker(QThread):
             time.sleep(0.1)
             pyautogui.press('backspace')
             time.sleep(0.1)
-            pyautogui.write(CAPAM_IP, interval=0.03)
+            pyautogui.write(self.capam_ip, interval=0.03)
             time.sleep(0.1)
             pyautogui.press('enter')
             
@@ -669,7 +670,7 @@ class AutomationWorker(QThread):
         if self.server_choice != "none":
             self.log(f"Đang chờ hiển thị màn hình danh sách thiết bị để chọn máy {self.server_choice}...")
             
-            target_title = f"Symantec Privileged Access Manager Client - {CAPAM_IP}"
+            target_title = f"Symantec Privileged Access Manager Client - {self.capam_ip}"
             device_window_rect = None
             
             # Khảo sát danh sách cửa sổ mỗi 0.5s trong tối đa 20 giây
@@ -834,6 +835,12 @@ class MainWindow(QMainWindow):
         cred_layout.addLayout(v_pass)
         main_layout.addLayout(cred_layout)
 
+        # 1b. CAPAM Server IP
+        main_layout.addWidget(QLabel("IP máy chủ CAPAM:"))
+        self.txt_capam_ip = QLineEdit()
+        self.txt_capam_ip.setText(CAPAM_IP_DEFAULT)
+        self.txt_capam_ip.setPlaceholderText("Ví dụ: 10.64.213.188")
+        main_layout.addWidget(self.txt_capam_ip)
         # 2. OTP Input
         lbl_otp = QLabel("Nhập mã OTP (6 chữ số):")
         lbl_otp.setStyleSheet("margin-top: 5px;")
@@ -844,6 +851,10 @@ class MainWindow(QMainWindow):
         self.txt_otp.setMaxLength(6)
         self.txt_otp.setAlignment(Qt.AlignCenter)
         self.txt_otp.setPlaceholderText("______")
+        # Nhấn Enter sau khi nhập OTP → tự động đăng nhập
+        self.txt_otp.returnPressed.connect(self.start_automation)
+        # Hoặc khi gõ đủ 6 số cũng tự đăng nhập
+        self.txt_otp.textChanged.connect(self.on_otp_changed)
         main_layout.addWidget(self.txt_otp)
 
         # 2. Server Selection
@@ -898,6 +909,11 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.load_settings()
 
+    def on_otp_changed(self, text):
+        """Tự động khởi chạy đăng nhập ngay khi OTP đủ 6 chữ số."""
+        if len(text) == 6 and text.isdigit():
+            self.start_automation()
+
     def toggle_password(self):
         if self.chk_show_pass.isChecked():
             self.txt_pass_prefix.setEchoMode(QLineEdit.Normal)
@@ -913,6 +929,8 @@ class MainWindow(QMainWindow):
                         self.txt_username.setText(data["username"])
                     if "password_prefix" in data:
                         self.txt_pass_prefix.setText(data["password_prefix"])
+                    if "capam_ip" in data:
+                        self.txt_capam_ip.setText(data["capam_ip"])
                     if "auto_exit" in data:
                         self.chk_auto_exit.setChecked(data["auto_exit"])
             except Exception:
@@ -923,6 +941,7 @@ class MainWindow(QMainWindow):
             data = {
                 "username": self.txt_username.text().strip(),
                 "password_prefix": self.txt_pass_prefix.text().strip(),
+                "capam_ip": self.txt_capam_ip.text().strip(),
                 "auto_exit": self.chk_auto_exit.isChecked()
             }
             with open(self.settings_file, "w", encoding="utf-8") as f:
@@ -938,8 +957,15 @@ class MainWindow(QMainWindow):
         password_prefix = self.txt_pass_prefix.text().strip()
         otp = self.txt_otp.text().strip()
         
+        capam_ip = self.txt_capam_ip.text().strip()
+        
         if not username or not password_prefix:
             self.log("[!] Vui lòng nhập đầy đủ Tài khoản và Mật khẩu.")
+            return
+        
+        if not capam_ip:
+            self.log("[!] Vui lòng nhập IP máy chủ CAPAM.")
+            self.txt_capam_ip.setFocus()
             return
 
         if len(otp) != 6 or not otp.isdigit():
@@ -955,6 +981,7 @@ class MainWindow(QMainWindow):
         self.btn_cancel.setEnabled(True)
         self.txt_username.setEnabled(False)
         self.txt_pass_prefix.setEnabled(False)
+        self.txt_capam_ip.setEnabled(False)
         self.txt_otp.setEnabled(False)
         self.rb_200.setEnabled(False)
         self.rb_12.setEnabled(False)
@@ -970,7 +997,7 @@ class MainWindow(QMainWindow):
         # Thu nhỏ cửa sổ UI chính để tránh che khuất cửa sổ CAPAM khi chụp màn hình và click RDP
         self.showMinimized()
         
-        self.worker = AutomationWorker(username, password_prefix, otp, choice)
+        self.worker = AutomationWorker(username, password_prefix, otp, choice, capam_ip)
         self.worker.log_signal.connect(self.log)
         self.worker.finished_signal.connect(self.automation_finished)
         self.worker.start()
@@ -998,6 +1025,7 @@ class MainWindow(QMainWindow):
         self.btn_cancel.setEnabled(False)
         self.txt_username.setEnabled(True)
         self.txt_pass_prefix.setEnabled(True)
+        self.txt_capam_ip.setEnabled(True)
         self.txt_otp.setEnabled(True)
         self.txt_otp.clear()
         self.rb_200.setEnabled(True)
