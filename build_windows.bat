@@ -12,5 +12,9 @@ pyinstaller --noconsole --onefile ^
     --name "CAPAM_AutoSign_Windows" ^
     main_automation.py
 
+echo Dang don dep cac tep tin tam (build, spec)...
+rmdir /s /q build
+del /q *.spec
+
 echo HOAN TAT! File chay doc lap (.exe) nam trong thu muc: dist\CAPAM_AutoSign_Windows.exe
 pause

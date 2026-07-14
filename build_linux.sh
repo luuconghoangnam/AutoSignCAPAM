@@ -11,4 +11,7 @@ python3 -m PyInstaller --noconsole --onefile \
     --name "CAPAM_AutoSign_Linux" \
     main_automation.py
 
+echo "Đang dọn dẹp các tệp tin tạm (build, spec)..."
+rm -rf build/ *.spec
+
 echo "HOÀN TẤT! File chạy độc lập nằm trong thư mục: dist/CAPAM_AutoSign_Linux"
