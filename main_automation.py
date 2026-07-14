@@ -511,7 +511,13 @@ class AutomationWorker(QThread):
             self.finished_signal.emit(False)
             return
             
-        fields = self.detect_capam_fields(rect_capam)
+        fields = []
+        for attempt in range(15):
+            fields = self.detect_capam_fields(rect_capam)
+            if len(fields) >= 1:
+                break
+            self.log(f"Đang chờ ô nhập IP xuất hiện... (Lần {attempt+1}/15)")
+            time.sleep(1)
         self.log(f"Màn hình Address: Phát hiện thấy {len(fields)} ô nhập liệu.")
         
         if len(fields) >= 1:
@@ -546,7 +552,16 @@ class AutomationWorker(QThread):
             self.finished_signal.emit(False)
             return
             
-        fields = self.detect_capam_fields(rect_capam)
+        fields = []
+        for attempt in range(15):
+            rect_capam = self.os_tool.get_window_rect("Symantec Privileged Access Manager")
+            if rect_capam:
+                fields = self.detect_capam_fields(rect_capam)
+                if len(fields) >= 2:
+                    break
+            self.log(f"Đang chờ màn hình đăng nhập hiển thị đủ các ô nhập liệu... (Lần {attempt+1}/15)")
+            time.sleep(1)
+            
         self.log(f"Màn hình Đăng nhập: Phát hiện thấy {len(fields)} ô nhập liệu.")
         
         if len(fields) >= 2:
