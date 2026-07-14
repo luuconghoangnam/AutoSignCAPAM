@@ -217,52 +217,69 @@ class AutomationWorker(QThread):
             except Exception:
                 pass
                 
-        template = cv2.imread(get_resource_path("template_rdp.png"))
+        # Tải ảnh mẫu thiết bị được chọn
+        dev_template_name = f"template_{self.server_choice}.png"
+        dev_template_path = get_resource_path(dev_template_name)
+        dev_template = cv2.imread(dev_template_path)
         
-        if scene is None or template is None:
-            self.log("Không thể tải ảnh chụp hoặc template RDP.")
+        rdp_template_path = get_resource_path("template_rdp.png")
+        rdp_template = cv2.imread(rdp_template_path)
+        
+        if scene is None or dev_template is None or rdp_template is None:
+            self.log(f"Không thể tải ảnh chụp hoặc template cần thiết (Choice: {self.server_choice}).")
             return False
             
-        self.log("Đang phân tích và quét tìm TẤT CẢ các nút RDP trên màn hình...")
-        result = cv2.matchTemplate(scene, template, cv2.TM_CCOEFF_NORMED)
+        self.log(f"Đang tìm vị trí nhãn thiết bị '{dev_template_name}' trên màn hình...")
+        res_dev = cv2.matchTemplate(scene, dev_template, cv2.TM_CCOEFF_NORMED)
+        _, max_val_dev, _, max_loc_dev = cv2.minMaxLoc(res_dev)
         
+        if max_val_dev < 0.65:
+            self.log(f"Không tìm thấy nhãn thiết bị {self.server_choice} (Độ khớp: {max_val_dev:.2f}). Đang chờ...")
+            return False
+            
+        dev_x, dev_y = max_loc_dev
+        dev_h, dev_w = dev_template.shape[:2]
+        dev_center_y = dev_y + dev_h / 2
+        
+        self.log(f"Đã tìm thấy thiết bị '{self.server_choice}' tại Y={dev_center_y:.1f}. Đang quét tìm các nút RDP...")
+        
+        res_rdp = cv2.matchTemplate(scene, rdp_template, cv2.TM_CCOEFF_NORMED)
         threshold = 0.65
-        locations = np.where(result >= threshold)
+        locs_rdp = np.where(res_rdp >= threshold)
         
-        # Nhóm các điểm gần nhau theo trục Y (khoảng cách < 10px thì coi là cùng 1 nút)
-        y_coords = []
-        for pt in zip(*locations[::-1]): # pt is (x, y)
-            if not any(abs(pt[1] - existing_pt[1]) < 10 for existing_pt in y_coords):
-                y_coords.append(pt)
+        rdp_pts = []
+        for pt in zip(*locs_rdp[::-1]): # pt is (x, y)
+            if not any(abs(pt[1] - existing[0][1]) < 10 and abs(pt[0] - existing[0][0]) < 10 for existing in rdp_pts):
+                rdp_pts.append((pt, rdp_template.shape[:2])) # save pt and shape
                 
-        # Sắp xếp các nút RDP từ trên xuống dưới
-        y_coords.sort(key=lambda p: p[1])
+        # Tìm nút RDP có Y-coordinate gần nhất với Y-coordinate của nhãn thiết bị
+        best_rdp = None
+        min_dist_y = float('inf')
         
+        for pt, shape in rdp_pts:
+            rdp_h, rdp_w = shape
+            rdp_center_y = pt[1] + rdp_h / 2
+            dist_y = abs(rdp_center_y - dev_center_y)
+            if dist_y < 20 and dist_y < min_dist_y:
+                min_dist_y = dist_y
+                best_rdp = (pt, shape)
+                
         # Giải phóng RAM ngay
-        del scene, template, result
+        del scene, dev_template, rdp_template, res_dev, res_rdp
         gc.collect()
         
-        if len(y_coords) > 0:
-            self.log(f"Phát hiện tổng cộng {len(y_coords)} nút RDP.")
-            
-            # Phân tích thông minh: Dựa theo danh sách CAPAM, DRM là số 1, RDP-200 là số 2, Terminal-12 là số 3
-            target_pt = None
-            if self.server_choice == "200":
-                target_pt = y_coords[1] if len(y_coords) >= 2 else y_coords[-1]
-                self.log("Đã chọn tự động Máy RDP-200 (Nút RDP số 2 từ trên xuống)")
-            elif self.server_choice == "12":
-                target_pt = y_coords[2] if len(y_coords) >= 3 else y_coords[-1]
-                self.log("Đã chọn tự động Máy Terminal-12 (Nút RDP số 3 từ trên xuống)")
-                
-            if target_pt:
-                click_x = target_pt[0] + 15  # Tọa độ tâm của nút
-                click_y = target_pt[1] + 15
-                self.log(f"Sắp click kết nối RDP tại tọa độ màn hình ({click_x}, {click_y})")
-                pyautogui.click(click_x, click_y)
-                return True
-                
-        self.log("Không tìm thấy đủ số lượng nút RDP trên màn hình. Đang chờ tải...")
-        return False
+        if best_rdp:
+            pt, shape = best_rdp
+            rdp_h, rdp_w = shape
+            click_x = pt[0] + rdp_w / 2
+            click_y = pt[1] + rdp_h / 2
+            self.log(f"Đã xác định nút RDP tương thích tại ({click_x}, {click_y}) (Cách dòng chữ thiết bị {min_dist_y:.1f}px)")
+            self.log(f"Sắp click kết nối RDP tại tọa độ màn hình ({click_x}, {click_y})")
+            pyautogui.click(click_x, click_y)
+            return True
+        else:
+            self.log("Không tìm thấy nút RDP nào nằm cùng dòng với thiết bị đã chọn.")
+            return False
 
     def detect_gp_fields(self, rect):
         screenshot_path = os.path.join(os.environ.get('TEMP', '/tmp'), "gp_crop.png")

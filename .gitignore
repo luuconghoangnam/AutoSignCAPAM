@@ -1,0 +1,18 @@
+# Build artifacts
+dist/
+build/
+*.spec
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual Environment
+venv/
+.venv/
+
+# Debug and temporary images
+*debug_scr.png
+capam_full_scr.png
+gp_crop.png
+screenshot_current.png

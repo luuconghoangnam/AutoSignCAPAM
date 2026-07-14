@@ -9,6 +9,8 @@ del /q *.spec
 echo Dang dong goi ung dung cho Windows...
 pyinstaller --noconsole --onefile ^
     --add-data "template_rdp.png;." ^
+    --add-data "template_200.png;." ^
+    --add-data "template_12.png;." ^
     --exclude-module PyQt5.QtWebEngine ^
     --exclude-module PyQt5.QtWebEngineWidgets ^
     --exclude-module PyQt5.QtWebKit ^

@@ -8,6 +8,8 @@ rm -rf build/ dist/ *.spec
 echo "Đang đóng gói ứng dụng cho Linux..."
 python3 -m PyInstaller --noconsole --onefile \
     --add-data "template_rdp.png:." \
+    --add-data "template_200.png:." \
+    --add-data "template_12.png:." \
     --exclude-module PyQt5.QtWebEngine \
     --exclude-module PyQt5.QtWebEngineWidgets \
     --exclude-module PyQt5.QtWebKit \
