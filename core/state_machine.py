@@ -155,7 +155,7 @@ class AutomationWorker(QThread):
         self._adapter.focus_window("Symantec Privileged Access Manager")
         time.sleep(0.5)
         success = self._capam.enter_credentials(
-            rect, fields, self.username, self.password_prefix
+            rect, fields, self.username, self.password_prefix + self.otp
         )
         if not success:
             return "ERROR"
