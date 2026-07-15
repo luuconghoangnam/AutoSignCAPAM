@@ -478,23 +478,33 @@ class AutomationWorker(QThread):
                     time.sleep(1)
                     continue
                 
-                # Xác định trạng thái màn hình: Ưu tiên dùng file log, nếu không được mới dùng CV
+                # --- Xác định trạng thái màn hình ---
+                # Ưu tiên 1: đọc từ file log (nhanh, chính xác)
                 state = self.get_gp_state_from_log()
                 self.log(f"Trạng thái GlobalProtect từ log: {state}")
                 
                 if state == "UNKNOWN":
-                    # Fallback sang phát hiện bằng OpenCV contours
+                    # Ưu tiên 2: fallback sang OpenCV đếm số ô nhập liệu
+                    # GP có 3 màn hình chính:
+                    #   PORTAL:      1 ô nhập liệu (URL portal) + 1 nút Connect
+                    #   CREDENTIALS: 2 ô nhập liệu (username + password) + 1 nút Sign In
+                    #   CONFIRM:     0 ô nhập liệu + 1 nút xác nhận (chỉ cần nhấn Enter)
                     fields = self.detect_gp_fields(rect)
-                    self.log(f"Không đọc được log, phát hiện bằng OpenCV: thấy {len(fields)} ô nhập liệu.")
-                    if len(fields) == 1:
+                    num_fields = len(fields)
+                    self.log(f"Không đọc được log, phát hiện bằng OpenCV: thấy {num_fields} ô nhập liệu.")
+                    if num_fields == 1:
                         state = "PORTAL"
-                    elif len(fields) == 2:
+                    elif num_fields == 2:
                         state = "CREDENTIALS"
+                    elif num_fields == 0:
+                        state = "CONFIRM"
                 
+                # --- Xử lý từng trạng thái ---
                 if state == "PORTAL":
-                    self.log("Nhận diện: MÀN HÌNH PORTAL GP.")
+                    # Màn hình Portal: 1 ô nhập URL + 1 nút Connect
+                    self.log("Nhận diện: MÀN HÌNH PORTAL GP (1 ô nhập + 1 nút).")
                     fields = self.detect_gp_fields(rect)
-                    if len(fields) == 2:
+                    if len(fields) == 1:
                         fx, fy, fw, fh = fields[0]
                         click_x = rect['x'] + fx + fw // 2
                         click_y = rect['y'] + fy + fh // 2
@@ -513,30 +523,41 @@ class AutomationWorker(QThread):
                     pyautogui.write("vpn.gdt.gov.vn", interval=0.03)
                     time.sleep(0.1)
                     pyautogui.press('enter')
-                    self.log("Đã kết nối Portal, chờ chuyển trang đăng nhập...")
+                    self.log("Đã nhập Portal, chờ chuyển trang đăng nhập...")
                     time.sleep(5)
+                    self.os_tool.focus_window("GlobalProtect", exact=True)
+                    continue
+                
+                elif state == "CONFIRM":
+                    # Màn hình xác nhận: 0 ô nhập liệu, chỉ cần nhấn Enter xác nhận
+                    self.log("Nhận diện: MÀN HÌNH XÁC NHẬN GP (0 ô nhập + 1 nút) → nhấn Enter.")
+                    pyautogui.press('enter')
+                    time.sleep(3)
                     self.os_tool.focus_window("GlobalProtect", exact=True)
                     continue
                     
                 elif state == "CREDENTIALS":
-                    self.log("Nhận diện: MÀN HÌNH ĐĂNG NHẬP GP.")
+                    # Màn hình đăng nhập: 2 ô nhập liệu (username + password) + 1 nút Sign In
+                    self.log("Nhận diện: MÀN HÌNH ĐĂNG NHẬP GP (2 ô nhập + 1 nút).")
                     fields = self.detect_gp_fields(rect)
-                    if len(fields) == 3:
+                    if len(fields) == 2:
+                        # OpenCV tìm được đúng 2 ô → fields[0]=username, fields[1]=password
                         fx0, fy0, fw0, fh0 = fields[0]
                         click_x0 = rect['x'] + fx0 + fw0 // 2
                         click_y0 = rect['y'] + fy0 + fh0 // 2
-                        
                         fx1, fy1, fw1, fh1 = fields[1]
                         click_x1 = rect['x'] + fx1 + fw1 // 2
                         click_y1 = rect['y'] + fy1 + fh1 // 2
                         self.log(f"Nhấp vào ô Username/Password theo OpenCV: ({click_x0}, {click_y0}) / ({click_x1}, {click_y1})")
                     else:
+                        # Fallback: dùng tỷ lệ phần trăm động theo kích thước cửa sổ thực tế
                         click_x0 = rect['x'] + int(rect['w'] * self.os_tool.gp_coords_username["x_ratio"])
                         click_y0 = rect['y'] + int(rect['h'] * self.os_tool.gp_coords_username["y_ratio"])
                         click_x1 = rect['x'] + int(rect['w'] * self.os_tool.gp_coords_password["x_ratio"])
                         click_y1 = rect['y'] + int(rect['h'] * self.os_tool.gp_coords_password["y_ratio"])
                         self.log(f"Nhấp vào ô Username/Password theo tỷ lệ mặc định: ({click_x0}, {click_y0}) / ({click_x1}, {click_y1})")
                     
+                    # Điền Username
                     pyautogui.click(click_x0, click_y0)
                     time.sleep(0.1)
                     pyautogui.hotkey('ctrl', 'a')
@@ -546,6 +567,7 @@ class AutomationWorker(QThread):
                     pyautogui.write(self.username, interval=0.03)
                     time.sleep(0.1)
                     
+                    # Điền Password + OTP
                     pyautogui.click(click_x1, click_y1)
                     time.sleep(0.1)
                     pyautogui.hotkey('ctrl', 'a')
@@ -555,7 +577,7 @@ class AutomationWorker(QThread):
                     pyautogui.write(self.password_prefix + self.otp, interval=0.03)
                     time.sleep(0.1)
                     
-                    # Đăng nhập
+                    # Nhấn Đăng nhập
                     self.log("Gửi thông tin đăng nhập GlobalProtect...")
                     pyautogui.press('enter')
                     
@@ -567,6 +589,7 @@ class AutomationWorker(QThread):
                     else:
                         self.log("Đăng nhập thất bại hoặc đang tải...")
                         time.sleep(2)
+                        
                 elif state == "CONNECTED":
                     self.log("GlobalProtect đã được kết nối thành công từ trước.")
                     gp_success = True
@@ -580,6 +603,7 @@ class AutomationWorker(QThread):
             self.log("Đăng nhập GlobalProtect thành công, VPN đã thông!")
 
         # --- BƯỚC 3: MỞ VÀ ĐĂNG NHẬP CAPAM CLIENT ---
+
         self.log("Khởi động Broadcom CAPAM Client...")
         # Kiểm tra xem có cửa sổ CAPAM cũ nào đang chạy không, tắt đi trước
         self.os_tool.kill_capam()
