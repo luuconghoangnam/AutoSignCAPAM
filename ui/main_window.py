@@ -265,7 +265,9 @@ class MainWindow(QMainWindow):
                 ctypes.c_int, ctypes.c_int, wintypes.UINT,
             )
             user32.SetWindowPos.restype = wintypes.BOOL
-            flags = 0x0001 | 0x0002 | 0x0040
+            # Dùng SWP_NOACTIVATE (0x0010) thay vì SHOWWINDOW (0x0040) khi gỡ bỏ Topmost
+            # để hệ điều hành không kích hoạt lại các cửa sổ nền, tránh việc cửa sổ bị ẩn đi.
+            flags = 0x0001 | 0x0002 | 0x0010
             user32.SetWindowPos(hwnd, wintypes.HWND(-2), 0, 0, 0, 0, flags)  # HWND_NOTOPMOST
         except Exception:
             pass
