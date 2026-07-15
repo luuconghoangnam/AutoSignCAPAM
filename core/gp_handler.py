@@ -249,6 +249,19 @@ class GPHandler:
         self._log("[Credentials] Thất bại sau 3 lần thử nhập thông tin đăng nhập GP.")
         return False
 
+    def submit_credentials(self, rect: dict) -> bool:
+        """Gửi thông tin đăng nhập bằng cách nhấn Enter trên cửa sổ GP."""
+        for attempt in range(3):
+            if attempt > 0:
+                self._log(f"[Credentials] Thử lại gửi Enter lần {attempt + 1}...")
+            if not self.adapter.focus_window("GlobalProtect", exact=True):
+                self._log("[Credentials] Không thể đưa GlobalProtect lên foreground để gửi Enter.")
+                time.sleep(0.5)
+                continue
+            pyautogui.press("enter")
+            return True
+        return False
+
 
     def wait_connected_or_fail(self, capam_ip: str, port: int = 443, timeout_sec: int = 25) -> str:
         """Chờ VPN kết nối hoặc phát hiện lỗi xác thực.
