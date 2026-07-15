@@ -99,7 +99,27 @@ class LinuxAdapter(OSAdapter):
                     return True
         except Exception:
             pass
-        subprocess.run(["globalprotect", "launch-ui"], check=False)
+            
+        # Fallback paths cho Linux
+        linux_paths = [
+            "/opt/paloaltonetworks/globalprotect/PanGPUI",
+            "/usr/bin/globalprotect"
+        ]
+        
+        launched = False
+        for path in linux_paths:
+            if os.path.exists(path):
+                if "PanGPUI" in path:
+                    subprocess.Popen([path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    subprocess.Popen([path, "launch-ui"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                launched = True
+                break
+                
+        if not launched:
+            # Chạy qua bash nếu không tìm thấy path tuyệt đối
+            subprocess.Popen(["globalprotect", "launch-ui"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
         return True
 
     def get_gp_log_path(self):
@@ -149,21 +169,34 @@ class WindowsAdapter(OSAdapter):
         subprocess.run(["taskkill", "/F", "/IM", "CAPAMClient.exe"], check=False, creationflags=creationflags)
         
     def launch_capam(self):
-        capam_path = r"C:\Program Files\Broadcom\CAPAM Client\CAPAMClient.exe"
-        if os.path.exists(capam_path):
-            subprocess.Popen([capam_path])
-        else:
-            # Fallback if installed in another location or added to PATH
+        capam_paths = [
+            r"C:\Program Files\Broadcom\CAPAM Client\CAPAMClient.exe",
+            r"C:\Program Files (x86)\Broadcom\CAPAM Client\CAPAMClient.exe"
+        ]
+        launched = False
+        for path in capam_paths:
+            if os.path.exists(path):
+                subprocess.Popen([path])
+                launched = True
+                break
+        if not launched:
             try:
                 subprocess.Popen(["CAPAMClient.exe"])
             except:
                 pass
                 
     def launch_gp_ui(self):
-        gp_path = r"C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPA.exe"
-        if os.path.exists(gp_path):
-            subprocess.Popen([gp_path])
-        else:
+        gp_paths = [
+            r"C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPA.exe",
+            r"C:\Program Files (x86)\Palo Alto Networks\GlobalProtect\PanGPA.exe"
+        ]
+        launched = False
+        for path in gp_paths:
+            if os.path.exists(path):
+                subprocess.Popen([path])
+                launched = True
+                break
+        if not launched:
             try:
                 subprocess.Popen(["PanGPA.exe"])
             except:
@@ -466,7 +499,7 @@ class AutomationWorker(QThread):
             if not self.os_tool.launch_gp_ui():
                 self.log("Không thể khởi động UI của GlobalProtect...")
                 
-            time.sleep(1.5)
+            time.sleep(2.5)
             self.os_tool.focus_window("GlobalProtect", exact=True)
             
             # Thực hiện vòng lặp thử đăng nhập tối đa 5 lần
@@ -476,7 +509,7 @@ class AutomationWorker(QThread):
                 rect = self.os_tool.get_window_rect("GlobalProtect")
                 if not rect:
                     self.log("Không tìm thấy cửa sổ GlobalProtect, đang thử lại...")
-                    time.sleep(1)
+                    time.sleep(2)
                     continue
                 
                 # --- Xác định trạng thái màn hình ---
