@@ -26,6 +26,9 @@ def get_resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 class OSAdapter:
+    gp_coords_portal = {"x": 150, "y": 277}
+    gp_coords_username = {"x": 150, "y": 238}
+    gp_coords_password = {"x": 150, "y": 277}
     def focus_window(self, title_keyword, exact=False): pass
     def get_window_rect(self, title_keyword): pass
     def take_screenshot(self, rect, path): pass
@@ -36,6 +39,9 @@ class OSAdapter:
     def get_gp_log_path(self): pass
 
 class LinuxAdapter(OSAdapter):
+    gp_coords_portal = {"x": 150, "y": 326}
+    gp_coords_username = {"x": 150, "y": 125}
+    gp_coords_password = {"x": 150, "y": 175}
     def focus_window(self, title_keyword, exact=False):
         try:
             if exact:
@@ -99,6 +105,9 @@ class LinuxAdapter(OSAdapter):
         return os.path.expanduser("~/.GlobalProtect/PanGPUI.log")
 
 class WindowsAdapter(OSAdapter):
+    gp_coords_portal = {"x": 150, "y": 277}
+    gp_coords_username = {"x": 150, "y": 238}
+    gp_coords_password = {"x": 150, "y": 277}
     def focus_window(self, title_keyword, exact=False):
         try:
             import pygetwindow as gw
@@ -377,7 +386,7 @@ class AutomationWorker(QThread):
                 crop = gray[y:y+h, x:x+w]
                 mean_val = np.mean(crop)
                 # Filter out solid buttons
-                if mean_val > 200:
+                if mean_val > 200 or mean_val < 80:
                     fields.append((x, y, w, h))
         return sorted(fields, key=lambda f: f[1])
 
@@ -478,9 +487,16 @@ class AutomationWorker(QThread):
                 
                 if state == "PORTAL":
                     self.log("Nhận diện: MÀN HÌNH PORTAL GP.")
-                    # Sử dụng tọa độ tương đối an toàn không đổi: Center X = 150, Center Y = 277
-                    click_x = rect['x'] + 150
-                    click_y = rect['y'] + 277
+                    fields = self.detect_gp_fields(rect)
+                    if len(fields) >= 1:
+                        fx, fy, fw, fh = fields[0]
+                        click_x = rect['x'] + fx + fw // 2
+                        click_y = rect['y'] + fy + fh // 2
+                        self.log(f"Nhấp vào ô Portal theo OpenCV: ({click_x}, {click_y})")
+                    else:
+                        click_x = rect['x'] + self.os_tool.gp_coords_portal["x"]
+                        click_y = rect['y'] + self.os_tool.gp_coords_portal["y"]
+                        self.log(f"Nhấp vào ô Portal theo tọa độ mặc định: ({click_x}, {click_y})")
                     
                     pyautogui.click(click_x, click_y)
                     time.sleep(0.1)
@@ -498,10 +514,23 @@ class AutomationWorker(QThread):
                     
                 elif state == "CREDENTIALS":
                     self.log("Nhận diện: MÀN HÌNH ĐĂNG NHẬP GP.")
+                    fields = self.detect_gp_fields(rect)
+                    if len(fields) >= 2:
+                        fx0, fy0, fw0, fh0 = fields[0]
+                        click_x0 = rect['x'] + fx0 + fw0 // 2
+                        click_y0 = rect['y'] + fy0 + fh0 // 2
+                        
+                        fx1, fy1, fw1, fh1 = fields[1]
+                        click_x1 = rect['x'] + fx1 + fw1 // 2
+                        click_y1 = rect['y'] + fy1 + fh1 // 2
+                        self.log(f"Nhấp vào ô Username/Password theo OpenCV: ({click_x0}, {click_y0}) / ({click_x1}, {click_y1})")
+                    else:
+                        click_x0 = rect['x'] + self.os_tool.gp_coords_username["x"]
+                        click_y0 = rect['y'] + self.os_tool.gp_coords_username["y"]
+                        click_x1 = rect['x'] + self.os_tool.gp_coords_password["x"]
+                        click_y1 = rect['y'] + self.os_tool.gp_coords_password["y"]
+                        self.log(f"Nhấp vào ô Username/Password theo tọa độ mặc định: ({click_x0}, {click_y0}) / ({click_x1}, {click_y1})")
                     
-                    # Điền Username: Tọa độ tương đối an toàn Center X = 150, Center Y = 238
-                    click_x0 = rect['x'] + 150
-                    click_y0 = rect['y'] + 238
                     pyautogui.click(click_x0, click_y0)
                     time.sleep(0.1)
                     pyautogui.hotkey('ctrl', 'a')
@@ -511,9 +540,6 @@ class AutomationWorker(QThread):
                     pyautogui.write(self.username, interval=0.03)
                     time.sleep(0.1)
                     
-                    # Điền Password + OTP: Tọa độ tương đối an toàn Center X = 150, Center Y = 277
-                    click_x1 = rect['x'] + 150
-                    click_y1 = rect['y'] + 277
                     pyautogui.click(click_x1, click_y1)
                     time.sleep(0.1)
                     pyautogui.hotkey('ctrl', 'a')
