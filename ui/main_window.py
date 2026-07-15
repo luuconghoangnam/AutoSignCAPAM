@@ -318,9 +318,6 @@ class MainWindow(QMainWindow):
         self.txt_logs.clear()
         self._log("[INFO] Bắt đầu khởi chạy kịch bản tự động hóa...")
 
-        # Thu nhỏ cửa sổ UI để không che khuất CAPAM/GP khi chụp màn hình
-        self.showMinimized()
-
         self.worker = AutomationWorker(username, password_prefix, otp, choice, capam_ip)
         self.worker.log_signal.connect(self._log)
         self.worker.finished_signal.connect(self._automation_finished)
