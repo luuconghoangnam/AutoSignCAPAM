@@ -139,10 +139,22 @@ class WindowsAdapter(OSAdapter):
         subprocess.run(["taskkill", "/F", "/IM", "CAPAMClient.exe"], check=False, creationflags=creationflags)
         
     def launch_capam(self):
-        capam_path = r"C:\Program Files\Broadcom\CAPAM Client\CAPAMClient.exe"
-        if os.path.exists(capam_path):
-            subprocess.Popen([capam_path])
-        else:
+        possible_paths = [
+            r"C:\Program Files\Broadcom\CAPAM Client\CAPAMClient.exe",
+            r"C:\Program Files (x86)\Broadcom\CAPAM Client\CAPAMClient.exe",
+            os.path.expanduser(r"~\CA PAM Client\CAPAMClient.exe"),
+            os.path.expanduser(r"~\CAPAM Client\CAPAMClient.exe"),
+        ]
+        launched = False
+        for path in possible_paths:
+            if os.path.exists(path):
+                try:
+                    subprocess.Popen([path])
+                    launched = True
+                    break
+                except:
+                    pass
+        if not launched:
             # Fallback if installed in another location or added to PATH
             try:
                 subprocess.Popen(["CAPAMClient.exe"])

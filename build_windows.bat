@@ -6,8 +6,7 @@ echo Dang don dep cac ban build cu...
 rmdir /s /q build dist
 del /q *.spec
 
-echo Dang dong goi ung dung cho Windows...
-pyinstaller --noconsole --onefile ^
+python -m PyInstaller --noconsole --onefile ^
     --add-data "template_rdp.png;." ^
     --add-data "template_200.png;." ^
     --add-data "template_12.png;." ^
@@ -43,4 +42,3 @@ rmdir /s /q build
 del /q *.spec
 
 echo HOAN TAT! File chay doc lap (.exe) nam trong thu muc: dist\CAPAM_AutoSign_Windows.exe
-pause
