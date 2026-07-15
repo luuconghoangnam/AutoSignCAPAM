@@ -34,6 +34,9 @@ class AutomationWorker(QThread):
         self._gp = GPHandler(self._adapter, log_fn=self._log)
         self._capam = CAPAMHandler(self._adapter, capam_ip, log_fn=self._log)
         self._rdp = RDPHandler(self._adapter, log_fn=self._log)
+        self._gp_visual_state = STATE_UNKNOWN
+        self._gp_visual_count = 0
+        self._gp_portal_submitted_at = 0.0
 
     def _log(self, msg: str) -> None:
         self.log_signal.emit(f"[*] {msg}")
@@ -50,13 +53,31 @@ class AutomationWorker(QThread):
             return "CAPAM_LAUNCH"
         return "GP_START"
 
+    def _state_reset_capam(self) -> str:
+        """Đóng CAPAM cũ để mỗi lượt automation bắt đầu từ màn hình Address."""
+        capam_rect = self._adapter.get_window_rect("Symantec Privileged Access Manager")
+        if not capam_rect:
+            return "CHECK_VPN"
+
+        self._log("Đang đóng phiên CAPAM cũ để bắt đầu lại từ đầu...")
+        if not self._adapter.kill_window_process(capam_rect):
+            self._log("Không xác định được process của phiên CAPAM cũ.")
+            return "ERROR"
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if not self._adapter.get_window_rect("Symantec Privileged Access Manager"):
+                self._log("Đã đóng phiên CAPAM cũ.")
+                return "CHECK_VPN"
+            time.sleep(0.2)
+
+        self._log("Không thể đóng phiên CAPAM cũ trong 5 giây.")
+        return "ERROR"
+
     def _state_gp_start(self) -> str:
         """State 2a: Khởi động UI GlobalProtect và ghi nhận log offset."""
         self._log("Bắt đầu kích hoạt GlobalProtect...")
         self._gp.init_log_offset()
         self._adapter.launch_gp_ui()
-        time.sleep(1.5)
-        self._adapter.focus_window("GlobalProtect", exact=True)
         return "GP_DETECT"
 
     def _state_gp_detect(self, attempt: int) -> str:
@@ -78,25 +99,48 @@ class AutomationWorker(QThread):
 
         # Xác định trạng thái màn hình dựa vào thực tế số lượng ô nhập nhận diện được trên UI
         if len(fields) == 1:
-            state = STATE_PORTAL
+            visual_state = STATE_PORTAL
         elif len(fields) >= 2:
-            state = STATE_CREDENTIALS
+            visual_state = STATE_CREDENTIALS
         else:
+            visual_state = STATE_UNKNOWN
             # Chỉ dùng trạng thái từ log khi OpenCV không phát hiện được ô nhập nào
             if state == STATE_UNKNOWN or (state == STATE_AUTH_FAILED and attempt == 1):
                 state = STATE_UNKNOWN
 
+        if visual_state != STATE_UNKNOWN:
+            if visual_state == self._gp_visual_state:
+                self._gp_visual_count += 1
+            else:
+                self._gp_visual_state = visual_state
+                self._gp_visual_count = 1
+            if self._gp_visual_count < 2:
+                self._log(f"Màn hình GP {visual_state} cần thêm 1 frame xác nhận.")
+                time.sleep(0.5)
+                return "GP_DETECT"
+            state = visual_state
+        else:
+            self._gp_visual_state = STATE_UNKNOWN
+            self._gp_visual_count = 0
 
         if state == STATE_PORTAL:
-            self._gp.enter_portal_url(rect, fields)
-            self._log("Đã kết nối Portal. Chờ chuyển trang đăng nhập (5 giây)...")
-            time.sleep(5)
-            self._adapter.focus_window("GlobalProtect", exact=True)
+            now = time.monotonic()
+            if now - self._gp_portal_submitted_at < 5:
+                time.sleep(0.5)
+                return "GP_DETECT"
+            if not self._gp.enter_portal_url(rect, fields):
+                time.sleep(0.5)
+                return "GP_DETECT"
+            self._gp_portal_submitted_at = now
+            self._log("Đã kết nối Portal. Poll màn hình đăng nhập mỗi 0.5 giây...")
+            time.sleep(0.5)
             return "GP_DETECT"
 
         elif state == STATE_CREDENTIALS:
             full_password = self.password_prefix + self.otp
-            self._gp.enter_credentials(rect, fields, self.username, full_password)
+            if not self._gp.enter_credentials(rect, fields, self.username, full_password):
+                time.sleep(0.5)
+                return "GP_DETECT"
             self._gp.mark_log_before_submit()
             self._log("Gửi thông tin đăng nhập GlobalProtect...")
             pyautogui.press("enter")
@@ -109,6 +153,7 @@ class AutomationWorker(QThread):
         elif state == STATE_AUTH_FAILED:
             return "GP_AUTH_FAILED"
 
+        time.sleep(0.5)
         return "GP_DETECT"
 
     def _state_gp_wait_connect(self) -> str:
@@ -128,7 +173,8 @@ class AutomationWorker(QThread):
         """State 3: Khởi động CAPAM Client."""
         self._log("Đang khởi động Broadcom CAPAM Client...")
         if not self._capam.launch_and_wait():
-            self._log("Không tìm thấy cửa sổ CAPAM Client. Tiếp tục với bước đăng nhập thủ công.")
+            self._log("Không tìm thấy hoặc không thể khởi động CAPAM Client.")
+            return "ERROR"
         return "CAPAM_ADDRESS"
 
     def _state_capam_address(self) -> str:
@@ -138,8 +184,6 @@ class AutomationWorker(QThread):
         if not rect:
             self._log("Lỗi: Không tìm thấy màn hình Address của CAPAM.")
             return "ERROR"
-        self._adapter.focus_window("Symantec Privileged Access Manager")
-        time.sleep(0.3)
         success = self._capam.enter_ip(rect, fields)
         if not success:
             return "ERROR"
@@ -152,8 +196,6 @@ class AutomationWorker(QThread):
         if not rect:
             self._log("Lỗi: Không tìm thấy màn hình đăng nhập CAPAM.")
             return "ERROR"
-        self._adapter.focus_window("Symantec Privileged Access Manager")
-        time.sleep(0.5)
         success = self._capam.enter_credentials(
             rect, fields, self.username, self.password_prefix + self.otp
         )
@@ -168,22 +210,22 @@ class AutomationWorker(QThread):
         rect = self._rdp.wait_for_device_list(self.capam_ip)
         if not rect:
             return "ERROR"
-        self._adapter.focus_window(f"Symantec Privileged Access Manager Client - {self.capam_ip}")
-        time.sleep(1.5)
         return "RDP_CLICK"
 
     def _state_rdp_click(self) -> str:
         """State 5b: Tìm và click nút RDP."""
         self._log(f"Đang tìm và click nút RDP cho thiết bị {self.server_choice}...")
-        if not self._rdp.click_rdp(self.server_choice):
+        if not self._rdp.click_rdp(self.server_choice, self.capam_ip):
             self._log("Không tìm thấy nút RDP trong thời gian chờ.")
             return "ERROR"
         return "WINDOWS_SECURITY"
 
     def _state_windows_security(self) -> str:
         """State 6: Điền thông tin vào bảng Windows Security."""
-        self._rdp.fill_windows_security(self.username, self.password_prefix)
-        return "DONE"
+        if self._rdp.fill_windows_security(self.username, self.password_prefix):
+            return "DONE"
+        self._log("Không thể hoàn tất bảng xác thực RDP CAPAM.")
+        return "ERROR"
 
     # ------------------------------------------------------------------
     # FSM Runner
@@ -191,11 +233,14 @@ class AutomationWorker(QThread):
 
     def run(self) -> None:
         pyautogui.PAUSE = 0.1
-        state = "CHECK_VPN"
+        state = "RESET_CAPAM"
         gp_attempts = 0
 
         while True:
-            if state == "CHECK_VPN":
+            if state == "RESET_CAPAM":
+                state = self._state_reset_capam()
+
+            elif state == "CHECK_VPN":
                 state = self._state_check_vpn()
 
             elif state == "GP_START":
@@ -203,8 +248,8 @@ class AutomationWorker(QThread):
 
             elif state == "GP_DETECT":
                 gp_attempts += 1
-                if gp_attempts > 4:
-                    self._log("Quá số lần thử đăng nhập GlobalProtect (4 lần). Dừng lại.")
+                if gp_attempts > 60:
+                    self._log("Không nhận diện được GlobalProtect trong 30 giây. Dừng lại.")
                     self.finished_signal.emit(False)
                     return
                 state = self._state_gp_detect(gp_attempts)
