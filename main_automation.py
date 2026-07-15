@@ -220,6 +220,8 @@ class AutomationWorker(QThread):
         self.server_choice = server_choice  # "200", "12", or "none"
         self.capam_ip = capam_ip
         self.os_tool = get_os_adapter()
+        self.gp_log_start_offset = 0
+
 
     def log(self, message):
         self.log_signal.emit(f"[*] {message}")
@@ -483,22 +485,34 @@ class AutomationWorker(QThread):
         return sorted(fields, key=lambda f: f[1])
 
 
-    def get_gp_state_from_log(self):
+    def get_gp_state_from_log(self, read_all=False):
         log_path = self.os_tool.get_gp_log_path()
         if not os.path.exists(log_path):
             return "UNKNOWN"
             
         try:
             with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
-                f.seek(0, 2)
-                size = f.tell()
-                f.seek(max(0, size - 20000))
+                if read_all:
+                    f.seek(0, 2)
+                    size = f.tell()
+                    f.seek(max(0, size - 30000))
+                else:
+                    current_size = os.path.getsize(log_path)
+                    start_offset = self.gp_log_start_offset
+                    if current_size < start_offset:
+                        start_offset = 0
+                    f.seek(start_offset)
                 content = f.read()
             import re
             matches = list(re.finditer(r"<response>.*?</response>", content, re.DOTALL))
             if not matches:
                 return "UNKNOWN"
             last_msg = matches[-1].group(0)
+            
+            # Kiểm tra xem có lỗi sai tài khoản/mật khẩu/OTP không
+            if "User authentication failed" in last_msg or "Authentication Failed" in last_msg:
+                return "AUTH_FAILED"
+                
             if "<type>user_credential</type>" in last_msg:
                 return "CREDENTIALS"
             elif "<type>status</type>" in last_msg:
@@ -506,9 +520,11 @@ class AutomationWorker(QThread):
                     return "CONNECTED"
                 else:
                     return "PORTAL"
+
         except Exception as e:
             self.log(f"Lỗi đọc trạng thái GP từ file log: {e}")
         return "UNKNOWN"
+
 
 
     def run(self):
@@ -521,6 +537,15 @@ class AutomationWorker(QThread):
         else:
             # --- BƯỚC 2: ĐĂNG NHẬP GLOBALPROTECT ---
             self.log("Bắt đầu kích hoạt GlobalProtect...")
+            
+            # Ghi nhận kích thước log ban đầu trước khi thực hiện hành động
+            try:
+                log_path = self.os_tool.get_gp_log_path()
+                if os.path.exists(log_path):
+                    self.gp_log_start_offset = os.path.getsize(log_path)
+            except Exception:
+                pass
+
             if not self.os_tool.launch_gp_ui():
                 self.log("Không thể khởi động UI của GlobalProtect...")
                 
@@ -543,8 +568,8 @@ class AutomationWorker(QThread):
                         continue
 
                 
-                # Xác định trạng thái màn hình: Ưu tiên dùng file log, nếu không được mới dùng CV
-                state = self.get_gp_state_from_log()
+                # Xác định trạng thái màn hình: Đọc toàn bộ file ở lần check đầu tiên, sau đó chỉ đọc log mới
+                state = self.get_gp_state_from_log(read_all=(attempt == 1))
                 self.log(f"Trạng thái GlobalProtect từ log: {state}")
                 
                 # Luôn chạy quét OpenCV để lấy tọa độ các ô nhập chính xác
@@ -624,19 +649,44 @@ class AutomationWorker(QThread):
                     pyautogui.write(self.password_prefix + self.otp, interval=0.03)
                     time.sleep(0.1)
                     
+                    # Ghi nhận kích thước file log ngay trước khi submit credentials để phát hiện lỗi sai mật khẩu
+                    try:
+                        self.gp_log_start_offset = os.path.getsize(self.os_tool.get_gp_log_path())
+                    except Exception:
+                        pass
+                        
                     # Đăng nhập
-
                     self.log("Gửi thông tin đăng nhập GlobalProtect...")
                     pyautogui.press('enter')
                     
-                    # Kiểm tra kết nối mạng sau đăng nhập
+                    # Kiểm tra kết nối mạng hoặc lỗi sai thông tin đăng nhập theo chu kỳ 1s
                     self.log("Đang chờ xác minh kết nối mạng VPN...")
-                    if self.wait_for_network(self.capam_ip, 443, timeout=25):
+                    vpn_connected = False
+                    auth_failed = False
+                    for wait_sec in range(50): # 50 * 0.5s = 25s
+                        # Kiểm tra xem VPN đã kết nối chưa
+                        if self.wait_for_network(self.capam_ip, 443, timeout=0.1):
+                            vpn_connected = True
+                            break
+                        # Kiểm tra xem có lỗi xác thực trong file log mới không
+                        chk_state = self.get_gp_state_from_log(read_all=False)
+                        if chk_state == "AUTH_FAILED":
+                            auth_failed = True
+                            break
+                        time.sleep(0.5)
+                        
+                    if auth_failed:
+                        self.log("[LỖI] Đăng nhập GlobalProtect thất bại: Sai tài khoản, mật khẩu hoặc mã OTP!")
+                        self.finished_signal.emit(False)
+                        return
+                        
+                    if vpn_connected:
                         gp_success = True
                         break
                     else:
                         self.log("Đăng nhập thất bại hoặc đang tải...")
                         time.sleep(2)
+
 
                 elif state == "CONNECTED":
                     self.log("GlobalProtect đã được kết nối thành công từ trước.")
