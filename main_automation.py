@@ -17,6 +17,14 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 from PyQt5.QtGui import QFont, QIcon, QColor, QPalette
 
+# Thiết lập DPI awareness trên Windows để tránh lệch tọa độ click và sai kích thước OpenCV
+if platform.system() == "Windows":
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # Per-monitor DPI aware
+    except Exception:
+        pass
+
 def get_resource_path(relative_path):
     """ Lấy đường dẫn tuyệt đối tĩnh (hỗ trợ cả môi trường PyInstaller) """
     try:
@@ -381,16 +389,35 @@ class AutomationWorker(QThread):
         edged = cv2.Canny(blurred, 50, 150)
         contours, _ = cv2.findContours(edged.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
+        # Create a debug copy of the image to draw contours
+        debug_img = img.copy()
+        
         fields = []
         for c in contours:
             x, y, w, h = cv2.boundingRect(c)
-            # GlobalProtect input field dimensions
-            if 120 <= w <= 290 and 15 <= h <= 45:
+            # Draw red rect for all raw contours
+            cv2.rectangle(debug_img, (x, y), (x + w, y + h), (0, 0, 255), 1)
+            cv2.putText(debug_img, f"{w}x{h}", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
+            
+            # GlobalProtect input field dimensions - more flexible on Windows
+            min_w = 100 if platform.system() == "Windows" else 120
+            max_w = 320 if platform.system() == "Windows" else 290
+            min_h = 10 if platform.system() == "Windows" else 15
+            max_h = 55 if platform.system() == "Windows" else 45
+            
+            if min_w <= w <= max_w and min_h <= h <= max_h:
                 crop = gray[y:y+h, x:x+w]
                 mean_val = np.mean(crop)
-                # Filter out solid buttons
-                if mean_val > 200:
+                # Filter out solid buttons (white/light inputs usually > 150 on Windows)
+                min_mean = 150 if platform.system() == "Windows" else 200
+                if mean_val > min_mean:
                     fields.append((x, y, w, h))
+                    # Draw green rect for matching fields
+                    cv2.rectangle(debug_img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                    
+        # Save debug image to local repo dir
+        debug_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug_gp_fields.png")
+        cv2.imwrite(debug_path, debug_img)
         return sorted(fields, key=lambda f: f[1])
 
     def detect_capam_fields(self, rect):
@@ -414,13 +441,32 @@ class AutomationWorker(QThread):
         edged = cv2.Canny(blurred, 50, 150)
         contours, _ = cv2.findContours(edged.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
+        # Create a debug copy of the image to draw contours
+        debug_img = img.copy()
+        
         fields = []
         for c in contours:
             x, y, w, h = cv2.boundingRect(c)
+            # Draw red rect for all raw contours
+            cv2.rectangle(debug_img, (x, y), (x + w, y + h), (0, 0, 255), 1)
+            cv2.putText(debug_img, f"{w}x{h}", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
+            
             # Input field dimensions (covers CAPAM login + Windows Security dialog)
-            if 80 <= w <= 280 and 12 <= h <= 40:
+            min_w = 60 if platform.system() == "Windows" else 80
+            max_w = 320 if platform.system() == "Windows" else 280
+            min_h = 10 if platform.system() == "Windows" else 12
+            max_h = 50 if platform.system() == "Windows" else 40
+            
+            if min_w <= w <= max_w and min_h <= h <= max_h:
                 fields.append((x, y, w, h))
+                # Draw green rect for matching fields
+                cv2.rectangle(debug_img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                
+        # Save debug image
+        debug_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug_capam_fields.png")
+        cv2.imwrite(debug_path, debug_img)
         return sorted(fields, key=lambda f: f[1])
+
 
     def get_gp_state_from_log(self):
         log_path = self.os_tool.get_gp_log_path()
