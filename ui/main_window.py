@@ -7,6 +7,7 @@ Thu nhỏ cửa sổ khi chạy tự động để không che khuất CAPAM/GP.
 """
 import os
 import json
+import time
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
@@ -56,9 +57,19 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.worker: AutomationWorker | None = None
+        self._activation_deadline = 0.0
+        self._foreground_since = 0.0
         self._init_ui()
         self._load_settings()
         QTimer.singleShot(0, self.txt_otp.setFocus)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not hasattr(self, "_first_show"):
+            self._first_show = True
+            # Trì hoãn 500ms để hệ điều hành hoàn tất chuyển giao focus sau khi click đúp chạy file .exe,
+            # sau đó kéo cửa sổ lên foreground để tránh bị Windows Explorer đẩy xuống dưới.
+            QTimer.singleShot(500, self.bring_to_front)
 
     # ------------------------------------------------------------------
     # UI Initialization
@@ -202,6 +213,63 @@ class MainWindow(QMainWindow):
         mode = QLineEdit.Normal if self.chk_show_pass.isChecked() else QLineEdit.Password
         self.txt_pass_prefix.setEchoMode(mode)
 
+    def bring_to_front(self) -> None:
+        """Giữ native topmost đến khi foreground ổn định; không hide/show Qt."""
+        self.showNormal()
+        hwnd = int(self.winId())
+        self._activation_deadline = time.monotonic() + 3.0
+        self._foreground_since = 0.0
+        self._activate_native_window(hwnd)
+
+    def _activate_native_window(self, hwnd: int) -> None:
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            user32.SetWindowPos.argtypes = (
+                wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                ctypes.c_int, ctypes.c_int, wintypes.UINT,
+            )
+            user32.SetWindowPos.restype = wintypes.BOOL
+            flags = 0x0001 | 0x0002 | 0x0040  # NOMOVE | NOSIZE | SHOWWINDOW
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            user32.SetWindowPos(hwnd, wintypes.HWND(-1), 0, 0, 0, 0, flags)  # HWND_TOPMOST
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+            now = time.monotonic()
+            if user32.GetForegroundWindow() == hwnd:
+                if not self._foreground_since:
+                    self._foreground_since = now
+                if now - self._foreground_since >= 0.7:
+                    self._clear_native_topmost(hwnd)
+                    return
+            else:
+                self._foreground_since = 0.0
+
+            if now < self._activation_deadline:
+                QTimer.singleShot(100, lambda: self._activate_native_window(hwnd))
+            else:
+                # Vẫn gỡ always-on-top sau timeout để không khóa z-order lâu dài.
+                self._clear_native_topmost(hwnd)
+        except Exception:
+            self.raise_()
+            self.activateWindow()
+
+    def _clear_native_topmost(self, hwnd: int) -> None:
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            user32.SetWindowPos.argtypes = (
+                wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                ctypes.c_int, ctypes.c_int, wintypes.UINT,
+            )
+            user32.SetWindowPos.restype = wintypes.BOOL
+            flags = 0x0001 | 0x0002 | 0x0040
+            user32.SetWindowPos(hwnd, wintypes.HWND(-2), 0, 0, 0, 0, flags)  # HWND_NOTOPMOST
+        except Exception:
+            pass
+
     def _log(self, text: str) -> None:
         self.txt_logs.append(text)
 
@@ -265,9 +333,7 @@ class MainWindow(QMainWindow):
         self._automation_finished(False)
 
     def _automation_finished(self, success: bool) -> None:
-        self.showNormal()
-        self.raise_()
-        self.activateWindow()
+        self.bring_to_front()
 
         if success and self.chk_auto_exit.isChecked():
             self._log("[INFO] Tự động đóng ứng dụng theo cài đặt...")
