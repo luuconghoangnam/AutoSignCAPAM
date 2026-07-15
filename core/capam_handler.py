@@ -96,13 +96,16 @@ class CAPAMHandler:
             time.sleep(0.2)
             rect = self.adapter.get_window_rect(CAPAM_WINDOW_TITLE)
             if rect:
-                fields = self._detect_fields(rect, self._debug_address)
-                if len(fields) >= 1:
-                    self._log(
-                        f"[Address] Phát hiện {len(fields)} ô trên màn hình Address "
-                        f"sau {attempt + 1} giây."
-                    )
-                    return rect, fields
+                ratio = rect["h"] / rect["w"]
+                # Màn hình Address dẹt hơn (ratio ~0.45). Chỉ quét khi tỷ lệ nhỏ hơn 0.55
+                if ratio < 0.55:
+                    fields = self._detect_fields(rect, self._debug_address)
+                    if len(fields) >= 1:
+                        self._log(
+                            f"[Address] Phát hiện {len(fields)} ô trên màn hình Address "
+                            f"sau {attempt + 1} giây (Ratio: {ratio:.3f})."
+                        )
+                        return rect, fields
             self._log(f"Chờ màn hình Address CAPAM... ({attempt + 1}/{max_wait}s)")
             time.sleep(1)
         return None, []
@@ -141,8 +144,8 @@ class CAPAMHandler:
     # ------------------------------------------------------------------
 
     def wait_for_login_screen(self, max_wait: int = 15) -> tuple[dict | None, list]:
-        """Chờ màn hình Login xuất hiện với ít nhất 2 ô nhập (Username + Password).
-        Phân biệt với màn hình Address bằng cách yêu cầu >= 2 ô.
+        """Chờ màn hình Login xuất hiện với ít nhất 1 ô nhập.
+        Phân biệt với màn hình Address bằng cách kiểm tra tỷ lệ khung hình.
         Returns: (rect, fields) hoặc (None, []) nếu timeout.
         """
         for attempt in range(max_wait):
@@ -150,13 +153,18 @@ class CAPAMHandler:
             time.sleep(0.2)
             rect = self.adapter.get_window_rect(CAPAM_WINDOW_TITLE)
             if rect:
-                fields = self._detect_fields(rect, self._debug_login)
-                if len(fields) >= 1:
-                    self._log(
-                        f"[Login] Màn hình đăng nhập sẵn sàng — {len(fields)} ô nhập liệu "
-                        f"sau {attempt + 1} giây."
-                    )
-                    return rect, fields
+                ratio = rect["h"] / rect["w"]
+                # Màn hình Login cao hơn (ratio ~0.65). Chỉ chấp nhận khi tỷ lệ >= 0.55
+                if ratio >= 0.55:
+                    fields = self._detect_fields(rect, self._debug_login)
+                    if len(fields) >= 1:
+                        self._log(
+                            f"[Login] Màn hình đăng nhập sẵn sàng — {len(fields)} ô nhập liệu "
+                            f"sau {attempt + 1} giây (Ratio: {ratio:.3f})."
+                        )
+                        return rect, fields
+                else:
+                    self._log(f"Vẫn là màn hình Address (Ratio: {ratio:.3f}). Chờ tải màn hình Login...")
             self._log(f"Chờ màn hình đăng nhập CAPAM... ({attempt + 1}/{max_wait}s)")
             time.sleep(1)
         return None, []
