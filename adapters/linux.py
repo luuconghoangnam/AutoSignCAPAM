@@ -1,0 +1,91 @@
+"""
+adapters/linux.py — Linux implementation của OSAdapter
+"""
+import os
+import subprocess
+import time
+
+from adapters.base import OSAdapter
+
+
+class LinuxAdapter(OSAdapter):
+
+    def focus_window(self, title_keyword: str, exact: bool = False) -> bool:
+        try:
+            if exact:
+                subprocess.run(["wmctrl", "-F", "-a", title_keyword], check=False)
+            else:
+                subprocess.run(["wmctrl", "-a", title_keyword], check=False)
+            time.sleep(0.5)
+            return True
+        except Exception:
+            return False
+
+    def get_window_rect(self, title_keyword: str) -> dict | None:
+        try:
+            out = subprocess.check_output(["wmctrl", "-l", "-G"]).decode("utf-8")
+            for line in out.splitlines():
+                if title_keyword.lower() in line.lower():
+                    parts = line.split()
+                    if len(parts) >= 6:
+                        return {
+                            "x": int(parts[2]),
+                            "y": int(parts[3]),
+                            "w": int(parts[4]),
+                            "h": int(parts[5]),
+                            "id": parts[0],
+                        }
+        except Exception:
+            pass
+        return None
+
+    def take_screenshot(self, rect: dict, path: str) -> None:
+        display = os.environ.get("DISPLAY", ":0")
+        subprocess.run(
+            ["maim", "-g", f"{rect['w']}x{rect['h']}+{rect['x']}+{rect['y']}", path],
+            env={"DISPLAY": display},
+            check=True,
+        )
+
+    def take_full_screenshot(self, path: str) -> None:
+        display = os.environ.get("DISPLAY", ":0")
+        subprocess.run(["maim", path], env={"DISPLAY": display}, check=True)
+
+    def kill_capam(self) -> None:
+        subprocess.run(["pkill", "-f", "CAPAMClient"], check=False)
+
+    def launch_capam(self) -> bool:
+        try:
+            subprocess.Popen(
+                [os.path.expanduser("~/CAPAMClient/CAPAMClient")],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except Exception:
+            return False
+
+    def launch_gp_ui(self) -> bool:
+        try:
+            import dbus
+            bus = dbus.SessionBus()
+            watcher_obj = bus.get_object("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher")
+            watcher = dbus.Interface(watcher_obj, "org.freedesktop.DBus.Properties")
+            items = watcher.Get("org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierItems")
+            for item in items:
+                parts = item.split("/", 1)
+                bus_name = parts[0]
+                path = "/" + parts[1] if len(parts) > 1 else "/StatusNotifierItem"
+                item_obj = bus.get_object(bus_name, path)
+                props = dbus.Interface(item_obj, "org.freedesktop.DBus.Properties")
+                if props.Get("org.kde.StatusNotifierItem", "Id") == "PanGPUI":
+                    notifier = dbus.Interface(item_obj, "org.kde.StatusNotifierItem")
+                    notifier.Activate(0, 0)
+                    return True
+        except Exception:
+            pass
+        subprocess.run(["globalprotect", "launch-ui"], check=False)
+        return True
+
+    def get_gp_log_path(self) -> str:
+        return os.path.expanduser("~/.GlobalProtect/PanGPUI.log")

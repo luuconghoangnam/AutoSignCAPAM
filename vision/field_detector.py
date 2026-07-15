@@ -1,0 +1,121 @@
+"""
+vision/field_detector.py — Nhận diện các ô nhập liệu bằng OpenCV
+
+Thay thế 2 hàm detect_gp_fields / detect_capam_fields bằng một hàm
+thống nhất với "profile" xác định ngưỡng kích thước khác nhau.
+Có thêm fallback pixel-based khi Canny không tìm được contour.
+"""
+import os
+import platform
+import cv2
+import numpy as np
+
+
+# --- Định nghĩa ngưỡng kích thước ô nhập liệu cho từng profile ---
+_PROFILES = {
+    "gp": {
+        "min_w": (100, 120),   # (Windows, Linux)
+        "max_w": (320, 290),
+        "min_h": (10, 15),
+        "max_h": (55, 45),
+        "min_mean": (150, 200),  # độ sáng trung bình tối thiểu (lọc nút bấm)
+    },
+    "capam": {
+        "min_w": (60, 80),
+        "max_w": (320, 280),
+        "min_h": (10, 12),
+        "max_h": (50, 40),
+        "min_mean": (0, 0),    # không lọc theo độ sáng
+    },
+    "windows_security": {
+        "min_w": (60, 80),
+        "max_w": (380, 320),
+        "min_h": (10, 12),
+        "max_h": (50, 40),
+        "min_mean": (0, 0),
+    },
+}
+
+_IS_WINDOWS = platform.system() == "Windows"
+
+
+def detect_input_fields(
+    screenshot_path: str,
+    profile: str = "capam",
+    debug_output_path: str | None = None,
+) -> list[tuple[int, int, int, int]]:
+    """Phát hiện các ô nhập liệu trong ảnh chụp màn hình.
+
+    Args:
+        screenshot_path: Đường dẫn đến file ảnh chụp màn hình.
+        profile: Tên profile xác định ngưỡng kích thước ('gp', 'capam', 'windows_security').
+        debug_output_path: Nếu cung cấp, lưu ảnh debug có vẽ khung các ô nhận diện được.
+
+    Returns:
+        Danh sách (x, y, w, h) của các ô nhập liệu, đã sắp xếp từ trên xuống dưới.
+    """
+    img = cv2.imread(screenshot_path)
+    if img is None:
+        return []
+
+    cfg = _PROFILES.get(profile, _PROFILES["capam"])
+    idx = 0 if _IS_WINDOWS else 1
+    min_w = cfg["min_w"][idx]
+    max_w = cfg["max_w"][idx]
+    min_h = cfg["min_h"][idx]
+    max_h = cfg["max_h"][idx]
+    min_mean = cfg["min_mean"][idx]
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edged = cv2.Canny(blurred, 50, 150)
+    contours, _ = cv2.findContours(edged.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    debug_img = img.copy() if debug_output_path else None
+    fields = []
+
+    for c in contours:
+        x, y, w, h = cv2.boundingRect(c)
+        if debug_img is not None:
+            cv2.rectangle(debug_img, (x, y), (x + w, y + h), (0, 0, 255), 1)
+            cv2.putText(debug_img, f"{w}x{h}", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
+
+        if min_w <= w <= max_w and min_h <= h <= max_h:
+            if min_mean > 0:
+                crop = gray[y:y+h, x:x+w]
+                if np.mean(crop) < min_mean:
+                    continue
+            fields.append((x, y, w, h))
+            if debug_img is not None:
+                cv2.rectangle(debug_img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+    # Nếu không tìm được qua Canny, thử pixel-based: tìm vùng màu sáng hình chữ nhật
+    if not fields and profile == "gp":
+        fields = _pixel_fallback(gray, min_w, max_w, min_h, max_h, debug_img)
+
+    if debug_img is not None and debug_output_path:
+        cv2.imwrite(debug_output_path, debug_img)
+
+    return sorted(fields, key=lambda f: f[1])
+
+
+def _pixel_fallback(
+    gray: np.ndarray,
+    min_w: int, max_w: int,
+    min_h: int, max_h: int,
+    debug_img: np.ndarray | None,
+) -> list[tuple[int, int, int, int]]:
+    """Fallback: Tìm vùng sáng hình chữ nhật trong ảnh xám.
+    Dùng khi Canny bỏ sót các ô nhập có viền mờ nhạt (flat design của GP trên Windows).
+    """
+    # Ngưỡng: tìm vùng sáng (màu nền ô nhập liệu thường > 230 trên GP Windows)
+    _, thresh = cv2.threshold(gray, 220, 255, cv2.THRESH_BINARY)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    fields = []
+    for c in contours:
+        x, y, w, h = cv2.boundingRect(c)
+        if min_w <= w <= max_w and min_h <= h <= max_h:
+            fields.append((x, y, w, h))
+            if debug_img is not None:
+                cv2.rectangle(debug_img, (x, y), (x + w, y + h), (255, 165, 0), 2)
+    return fields

@@ -10,6 +10,20 @@ python -m PyInstaller --noconsole --onefile ^
     --add-data "template_rdp.png;." ^
     --add-data "template_200.png;." ^
     --add-data "template_12.png;." ^
+    --paths "." ^
+    --hidden-import "adapters" ^
+    --hidden-import "adapters.windows" ^
+    --hidden-import "adapters.linux" ^
+    --hidden-import "core" ^
+    --hidden-import "core.state_machine" ^
+    --hidden-import "core.gp_handler" ^
+    --hidden-import "core.capam_handler" ^
+    --hidden-import "core.rdp_handler" ^
+    --hidden-import "vision" ^
+    --hidden-import "vision.field_detector" ^
+    --hidden-import "vision.template_matcher" ^
+    --hidden-import "ui" ^
+    --hidden-import "ui.main_window" ^
     --exclude-module PyQt5.QtWebEngine ^
     --exclude-module PyQt5.QtWebEngineWidgets ^
     --exclude-module PyQt5.QtWebKit ^
@@ -35,7 +49,8 @@ python -m PyInstaller --noconsole --onefile ^
     --exclude-module IPython ^
     --exclude-module jinja2 ^
     --name "CAPAM_AutoSign_Windows" ^
-    main_automation.py
+    main.py
+
 
 echo Dang don dep cac tep tin tam (build, spec)...
 rmdir /s /q build
