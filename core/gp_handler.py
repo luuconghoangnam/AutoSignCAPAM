@@ -103,9 +103,11 @@ class GPHandler:
                 return STATE_UNKNOWN
             last_msg = matches[-1].group(0)
 
-            # Kiểm tra lỗi xác thực ngay lập tức
-            if "User authentication failed" in last_msg or "Authentication Failed" in last_msg:
-                return STATE_AUTH_FAILED
+            # Kiểm tra lỗi xác thực ngay lập tức (chỉ áp dụng khi đọc log mới)
+            if not read_all:
+                if "User authentication failed" in last_msg or "Authentication Failed" in last_msg:
+                    return STATE_AUTH_FAILED
+
 
             if "<type>user_credential</type>" in last_msg:
                 return STATE_CREDENTIALS

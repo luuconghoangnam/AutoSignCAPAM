@@ -76,11 +76,16 @@ class AutomationWorker(QThread):
         fields = self._gp.detect_fields(rect)
         self._log(f"OpenCV phát hiện {len(fields)} ô nhập liệu.")
 
-        if state == STATE_UNKNOWN:
-            if len(fields) == 1:
-                state = STATE_PORTAL
-            elif len(fields) >= 2:
-                state = STATE_CREDENTIALS
+        # Xác định trạng thái màn hình dựa vào thực tế số lượng ô nhập nhận diện được trên UI
+        if len(fields) == 1:
+            state = STATE_PORTAL
+        elif len(fields) >= 2:
+            state = STATE_CREDENTIALS
+        else:
+            # Chỉ dùng trạng thái từ log khi OpenCV không phát hiện được ô nhập nào
+            if state == STATE_UNKNOWN or (state == STATE_AUTH_FAILED and attempt == 1):
+                state = STATE_UNKNOWN
+
 
         if state == STATE_PORTAL:
             self._gp.enter_portal_url(rect, fields)
