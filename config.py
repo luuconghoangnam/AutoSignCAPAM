@@ -13,13 +13,18 @@ GP_PORTAL_URL = "vpn.gdt.gov.vn"
 if platform.system() == "Windows":
     try:
         import ctypes
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # Per-monitor DPI aware
+        # Per-monitor v2 must run before importing Qt or creating any HWND.
+        if not ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            raise OSError("SetProcessDpiAwarenessContext failed")
     except Exception:
         try:
             import ctypes
-            ctypes.windll.user32.SetProcessDPIAware()
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
         except Exception:
-            pass
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
 
 
 def get_resource_path(relative_path: str) -> str:

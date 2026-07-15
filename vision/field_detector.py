@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 
 
-# --- Định nghĩa ngưỡng kích thước ô nhập liệu cho từng profile ---
+# --- Legacy pixel limits retained as broad safety limits. Main limits use ratios. ---
 _PROFILES = {
     "gp": {
         "min_w": (100, 120),   # (Windows, Linux)
@@ -60,11 +60,15 @@ def detect_input_fields(
 
     cfg = _PROFILES.get(profile, _PROFILES["capam"])
     idx = 0 if _IS_WINDOWS else 1
-    min_w = cfg["min_w"][idx]
-    max_w = cfg["max_w"][idx]
-    min_h = cfg["min_h"][idx]
-    max_h = cfg["max_h"][idx]
     min_mean = cfg["min_mean"][idx]
+    image_h, image_w = img.shape[:2]
+    # Controls scale with DPI. Absolute pixel thresholds reject 125%/150% frames.
+    ratio_limits = {
+        "gp": (0.25, 0.9, 0.015, 0.18),
+        "capam": (0.08, 0.85, 0.008, 0.18),
+        "windows_security": (0.08, 0.9, 0.008, 0.18),
+    }
+    min_wr, max_wr, min_hr, max_hr = ratio_limits.get(profile, ratio_limits["capam"])
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -80,7 +84,7 @@ def detect_input_fields(
             cv2.rectangle(debug_img, (x, y), (x + w, y + h), (0, 0, 255), 1)
             cv2.putText(debug_img, f"{w}x{h}", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 255), 1)
 
-        if min_w <= w <= max_w and min_h <= h <= max_h:
+        if min_wr <= w / image_w <= max_wr and min_hr <= h / image_h <= max_hr:
             if min_mean > 0:
                 crop = gray[y:y+h, x:x+w]
                 if np.mean(crop) < min_mean:
@@ -91,7 +95,7 @@ def detect_input_fields(
 
     # Nếu không tìm được qua Canny, thử pixel-based: tìm vùng màu sáng hình chữ nhật
     if not fields and profile == "gp":
-        fields = _pixel_fallback(gray, min_w, max_w, min_h, max_h, debug_img)
+        fields = _pixel_fallback(gray, min_wr, max_wr, min_hr, max_hr, debug_img)
 
     if debug_img is not None and debug_output_path:
         cv2.imwrite(debug_output_path, debug_img)
@@ -101,8 +105,8 @@ def detect_input_fields(
 
 def _pixel_fallback(
     gray: np.ndarray,
-    min_w: int, max_w: int,
-    min_h: int, max_h: int,
+    min_wr: float, max_wr: float,
+    min_hr: float, max_hr: float,
     debug_img: np.ndarray | None,
 ) -> list[tuple[int, int, int, int]]:
     """Fallback: Tìm vùng sáng hình chữ nhật trong ảnh xám.
@@ -112,9 +116,10 @@ def _pixel_fallback(
     _, thresh = cv2.threshold(gray, 220, 255, cv2.THRESH_BINARY)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     fields = []
+    image_h, image_w = gray.shape[:2]
     for c in contours:
         x, y, w, h = cv2.boundingRect(c)
-        if min_w <= w <= max_w and min_h <= h <= max_h:
+        if min_wr <= w / image_w <= max_wr and min_hr <= h / image_h <= max_hr:
             fields.append((x, y, w, h))
             if debug_img is not None:
                 cv2.rectangle(debug_img, (x, y), (x + w, y + h), (255, 165, 0), 2)
