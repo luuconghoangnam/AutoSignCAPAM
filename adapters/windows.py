@@ -65,18 +65,13 @@ def _force_foreground(hwnd) -> bool:
         else:
             user32.ShowWindow(hwnd, 5)  # SW_SHOW
 
-        # 2. Bỏ qua focus-stealing prevention bằng cách mô phỏng nhấn phím ALT (VK_MENU = 0x12)
-        # Điều này cho phép tiến trình hiện tại được quyền set foreground window
-        user32.keybd_event(0x12, 0, 0, 0)      # ALT down
-        user32.keybd_event(0x12, 0, 2, 0)      # ALT up
-
-        # 3. Đưa cửa sổ lên trên cùng của Z-order bằng SetWindowPos
+        # 2. Đưa cửa sổ lên trên cùng của Z-order bằng SetWindowPos
         # HWND_TOPMOST = -1, HWND_NOTOPMOST = -2
         # SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_SHOWWINDOW = 0x0040
         user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040)
         user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040)
 
-        # 4. Attach thread input của tiến trình Python hiện tại vào foreground thread và target thread
+        # 3. Attach thread input của tiến trình Python hiện tại vào foreground thread và target thread
         current_thread = kernel32.GetCurrentThreadId()
         foreground_thread = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)
         target_thread = user32.GetWindowThreadProcessId(hwnd, None)
@@ -90,7 +85,7 @@ def _force_foreground(hwnd) -> bool:
             attached_target = bool(user32.AttachThreadInput(current_thread, target_thread, True))
 
         try:
-            # 5. Set foreground và Bring to top
+            # 4. Set foreground và Bring to top
             user32.BringWindowToTop(hwnd)
             user32.SetForegroundWindow(hwnd)
             user32.SetFocus(hwnd)
