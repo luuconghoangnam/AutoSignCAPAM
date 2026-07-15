@@ -419,7 +419,7 @@ class AutomationWorker(QThread):
             with open(log_path, "r", encoding="utf-8") as f:
                 f.seek(0, 2)
                 size = f.tell()
-                f.seek(max(0, size - 10000))
+                f.seek(max(0, size - 150000))
                 content = f.read()
             import re
             matches = list(re.finditer(r"RECV_FROM_GPA:\s*(<response>.*?</response>)", content, re.DOTALL))
@@ -442,7 +442,7 @@ class AutomationWorker(QThread):
         
         # --- BƯỚC 1: KIỂM TRA MẠNG TRƯỚC ---
         self.log(f"Kiểm tra kết nối mạng tới CAPAM ({self.capam_ip})...")
-        if self.wait_for_network(self.capam_ip, 443, timeout=2):
+        if self.wait_for_network(self.capam_ip, 443, timeout=5):
             self.log("GlobalProtect đã được kết nối sẵn. Bỏ qua đăng nhập GP.")
         else:
             # --- BƯỚC 2: ĐĂNG NHẬP GLOBALPROTECT ---
