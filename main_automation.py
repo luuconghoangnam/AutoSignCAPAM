@@ -81,6 +81,27 @@ class LinuxAdapter(OSAdapter):
         subprocess.Popen([os.path.expanduser("~/CAPAMClient/CAPAMClient")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
     def launch_gp_ui(self):
+        # 1. Đảm bảo system service 'gpd' (PanGPS daemon) đang chạy
+        try:
+            res_gpd = subprocess.run(["systemctl", "is-active", "gpd"], capture_output=True, text=True)
+            if res_gpd.stdout.strip() != "active":
+                # Gọi systemctl start gpd (KDE/polkit sẽ tự hiển thị popup GUI đòi mật khẩu root)
+                subprocess.Popen(["systemctl", "start", "gpd"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                # Chờ một lúc cho user nhập mật khẩu hoặc service khởi động
+                time.sleep(2)
+        except Exception:
+            pass
+
+        # 2. Đảm bảo user service 'gpa' (PanGPA agent) đang chạy
+        try:
+            res_gpa = subprocess.run(["systemctl", "--user", "is-active", "gpa"], capture_output=True, text=True)
+            if res_gpa.stdout.strip() != "active":
+                subprocess.run(["systemctl", "--user", "start", "gpa"], check=False)
+                time.sleep(1)
+        except Exception:
+            pass
+
+        # 3. Kích hoạt giao diện UI
         try:
             import dbus
             bus = dbus.SessionBus()
