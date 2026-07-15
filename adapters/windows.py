@@ -70,6 +70,18 @@ def _force_foreground(hwnd) -> bool:
         return False
 
 
+def _get_clean_env() -> dict:
+    import sys
+    env = os.environ.copy()
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        meipass = sys._MEIPASS
+        path_list = env.get("PATH", "").split(os.pathsep)
+        # Loại bỏ thư mục tạm _MEIPASS của PyInstaller khỏi PATH để tránh xung đột DLL (như java.dll của JDK hệ thống)
+        clean_path_list = [p for p in path_list if os.path.normpath(p) != os.path.normpath(meipass)]
+        env["PATH"] = os.pathsep.join(clean_path_list)
+    return env
+
+
 class WindowsAdapter(OSAdapter):
 
     def focus_window(self, title_keyword: str, exact: bool = False) -> bool:
@@ -158,29 +170,32 @@ class WindowsAdapter(OSAdapter):
 
     def launch_capam(self) -> bool:
         exe = self.find_capam_exe()
+        env = _get_clean_env()
         if exe:
             try:
-                subprocess.Popen([exe])
+                # Đặt cwd là thư mục chứa exe để Java tìm đúng các file cấu hình và DLL đi kèm của nó
+                subprocess.Popen([exe], env=env, cwd=os.path.dirname(exe))
                 return True
             except Exception:
                 pass
         # Thử trực tiếp từ PATH
         try:
-            subprocess.Popen(["CAPAMClient.exe"])
+            subprocess.Popen(["CAPAMClient.exe"], env=env)
             return True
         except Exception:
             return False
 
     def launch_gp_ui(self) -> bool:
+        env = _get_clean_env()
         for gp_path in GP_EXE_PATHS:
             if os.path.exists(gp_path):
                 try:
-                    subprocess.Popen([gp_path])
+                    subprocess.Popen([gp_path], env=env, cwd=os.path.dirname(gp_path))
                     return True
                 except Exception:
                     pass
         try:
-            subprocess.Popen(["PanGPA.exe"])
+            subprocess.Popen(["PanGPA.exe"], env=env)
             return True
         except Exception:
             return False
