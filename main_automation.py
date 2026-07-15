@@ -112,7 +112,14 @@ class WindowsAdapter(OSAdapter):
             import pygetwindow as gw
             windows = gw.getWindowsWithTitle(title_keyword)
             if windows:
-                win = windows[0]
+                if exact or title_keyword == "GlobalProtect":
+                    exact_wins = [w for w in windows if w.title == title_keyword]
+                    if exact_wins:
+                        win = exact_wins[0]
+                    else:
+                        win = windows[0]
+                else:
+                    win = windows[0]
                 if win.isMinimized: win.restore()
                 win.activate()
                 time.sleep(0.5)
@@ -126,11 +133,19 @@ class WindowsAdapter(OSAdapter):
             import pygetwindow as gw
             windows = gw.getWindowsWithTitle(title_keyword)
             if windows:
-                win = windows[0]
+                if title_keyword == "GlobalProtect":
+                    exact_wins = [w for w in windows if w.title == title_keyword]
+                    if exact_wins:
+                        win = exact_wins[0]
+                    else:
+                        win = windows[0]
+                else:
+                    win = windows[0]
                 return {"x": win.left, "y": win.top, "w": win.width, "h": win.height, "id": "win_id"}
         except Exception:
             pass
         return None
+
         
     def take_screenshot(self, rect, path):
         from PIL import ImageGrab

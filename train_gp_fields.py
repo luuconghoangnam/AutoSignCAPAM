@@ -9,15 +9,23 @@ import platform
 def main():
     print("=== CAPAM AutoSign - GlobalProtect Window Field Training Tool ===")
     
-    # 1. Find GlobalProtect window
+    # 1. Find GlobalProtect window (exact match preferred)
     windows = gw.getWindowsWithTitle("GlobalProtect")
-    if not windows:
+    exact_windows = [w for w in windows if w.title == "GlobalProtect"]
+    if exact_windows:
+        win = exact_windows[0]
+    elif windows:
+        win = windows[0]
+    else:
+        win = None
+        
+    if not win:
         print("[-] GlobalProtect window not found! Make sure GlobalProtect is open and visible on screen.")
         return
         
-    win = windows[0]
     print(f"[+] Found window: Title='{win.title}'")
     print(f"    Geometry: Left={win.left}, Top={win.top}, Width={win.width}, Height={win.height}")
+
     
     # 2. Activate and bring window to front
     try:
