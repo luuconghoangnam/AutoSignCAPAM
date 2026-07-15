@@ -484,28 +484,28 @@ class AutomationWorker(QThread):
                 self.log(f"Trạng thái GlobalProtect từ log: {state}")
                 
                 if state == "UNKNOWN":
-                    # Ưu tiên 2: fallback sang OpenCV đếm số ô nhập liệu
-                    # GP có 3 màn hình chính:
-                    #   PORTAL:      1 ô nhập liệu (URL portal) + 1 nút Connect
-                    #   CREDENTIALS: 2 ô nhập liệu (username + password) + 1 nút Sign In
-                    #   CONFIRM:     0 ô nhập liệu + 1 nút xác nhận (chỉ cần nhấn Enter)
+                    # Fallback sang phát hiện bằng OpenCV contours
+                    # GP có 3 màn hình:
+                    #   PORTAL:      1 ô nhập liệu + 1 nút Connect = 2 ô
+                    #   CREDENTIALS: 2 ô nhập liệu + 1 nút Sign In = 3 ô
+                    #   CONFIRM:     0 ô nhập liệu + 1 nút xác nhận = 1 ô
                     fields = self.detect_gp_fields(rect)
                     num_fields = len(fields)
-                    self.log(f"Không đọc được log, phát hiện bằng OpenCV: thấy {num_fields} ô nhập liệu.")
-                    if num_fields == 1:
+                    self.log(f"Không đọc được log, phát hiện bằng OpenCV: thấy {num_fields} ô nhập liệu/nút.")
+                    if num_fields == 2:
                         state = "PORTAL"
-                    elif num_fields == 2:
+                    elif num_fields == 3:
                         state = "CREDENTIALS"
-                    elif num_fields == 0:
+                    elif num_fields == 1:
                         state = "CONFIRM"
                 
                 # --- Xử lý từng trạng thái ---
                 if state == "PORTAL":
                     # Màn hình Portal: 1 ô nhập URL + 1 nút Connect
-                    self.log("Nhận diện: MÀN HÌNH PORTAL GP (1 ô nhập + 1 nút).")
+                    self.log("Nhận diện: MÀN HÌNH PORTAL GP (1 ô nhập + 1 nút = 2 ô).")
                     fields = self.detect_gp_fields(rect)
-                    if len(fields) == 1:
-                        fx, fy, fw, fh = fields[0]
+                    if len(fields) == 2:
+                        fx, fy, fw, fh = fields[0] # Ô đầu tiên là portal url
                         click_x = rect['x'] + fx + fw // 2
                         click_y = rect['y'] + fy + fh // 2
                         self.log(f"Nhấp vào ô Portal theo OpenCV: ({click_x}, {click_y})")
@@ -530,18 +530,18 @@ class AutomationWorker(QThread):
                 
                 elif state == "CONFIRM":
                     # Màn hình xác nhận: 0 ô nhập liệu, chỉ cần nhấn Enter xác nhận
-                    self.log("Nhận diện: MÀN HÌNH XÁC NHẬN GP (0 ô nhập + 1 nút) → nhấn Enter.")
+                    self.log("Nhận diện: MÀN HÌNH XÁC NHẬN GP (1 nút) → nhấn Enter.")
                     pyautogui.press('enter')
                     time.sleep(3)
                     self.os_tool.focus_window("GlobalProtect", exact=True)
                     continue
                     
                 elif state == "CREDENTIALS":
-                    # Màn hình đăng nhập: 2 ô nhập liệu (username + password) + 1 nút Sign In
-                    self.log("Nhận diện: MÀN HÌNH ĐĂNG NHẬP GP (2 ô nhập + 1 nút).")
+                    # Màn hình đăng nhập: 2 ô nhập liệu (username + password) + 1 nút Sign In = 3 ô
+                    self.log("Nhận diện: MÀN HÌNH ĐĂNG NHẬP GP (2 ô nhập + 1 nút = 3 ô).")
                     fields = self.detect_gp_fields(rect)
-                    if len(fields) == 2:
-                        # OpenCV tìm được đúng 2 ô → fields[0]=username, fields[1]=password
+                    if len(fields) == 3:
+                        # OpenCV tìm được đúng 3 ô → fields[0]=username, fields[1]=password, fields[2]=button
                         fx0, fy0, fw0, fh0 = fields[0]
                         click_x0 = rect['x'] + fx0 + fw0 // 2
                         click_y0 = rect['y'] + fy0 + fh0 // 2
