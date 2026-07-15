@@ -489,16 +489,16 @@ class AutomationWorker(QThread):
             return "UNKNOWN"
             
         try:
-            with open(log_path, "r", encoding="utf-8") as f:
+            with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
                 f.seek(0, 2)
                 size = f.tell()
-                f.seek(max(0, size - 10000))
+                f.seek(max(0, size - 20000))
                 content = f.read()
             import re
-            matches = list(re.finditer(r"RECV_FROM_GPA:\s*(<response>.*?</response>)", content, re.DOTALL))
+            matches = list(re.finditer(r"<response>.*?</response>", content, re.DOTALL))
             if not matches:
                 return "UNKNOWN"
-            last_msg = matches[-1].group(1)
+            last_msg = matches[-1].group(0)
             if "<type>user_credential</type>" in last_msg:
                 return "CREDENTIALS"
             elif "<type>status</type>" in last_msg:
@@ -509,6 +509,7 @@ class AutomationWorker(QThread):
         except Exception as e:
             self.log(f"Lỗi đọc trạng thái GP từ file log: {e}")
         return "UNKNOWN"
+
 
     def run(self):
         pyautogui.PAUSE = 0.1
@@ -558,10 +559,10 @@ class AutomationWorker(QThread):
                         click_y = rect['y'] + y0 + h0 // 2
                         self.log(f"Sử dụng tọa độ OpenCV cho Portal: ({click_x}, {click_y})")
                     else:
-                        # Sử dụng tọa độ tương đối an toàn không đổi: Center X = 150, Center Y = 277
-                        click_x = rect['x'] + 150
-                        click_y = rect['y'] + 277
-                        self.log(f"Sử dụng tọa độ fallback cho Portal: ({click_x}, {click_y})")
+                        # Sử dụng tọa độ tỷ lệ phần trăm (Portal ở khoảng 78% chiều cao)
+                        click_x = rect['x'] + int(rect['w'] * 0.5)
+                        click_y = rect['y'] + int(rect['h'] * 0.78)
+                        self.log(f"Sử dụng tọa độ tỷ lệ phần trăm cho Portal: ({click_x}, {click_y})")
                     
                     pyautogui.click(click_x, click_y)
                     time.sleep(0.1)
@@ -591,13 +592,13 @@ class AutomationWorker(QThread):
                         click_y1 = rect['y'] + y1 + h1 // 2
                         self.log(f"Sử dụng tọa độ OpenCV: Username ({click_x0}, {click_y0}), Password ({click_x1}, {click_y1})")
                     else:
-                        # Điền Username: Tọa độ tương đối an toàn Center X = 150, Center Y = 238
-                        click_x0 = rect['x'] + 150
-                        click_y0 = rect['y'] + 238
-                        # Điền Password + OTP: Tọa độ tương đối an toàn Center X = 150, Center Y = 277
-                        click_x1 = rect['x'] + 150
-                        click_y1 = rect['y'] + 277
-                        self.log(f"Sử dụng tọa độ fallback cứng: Username ({click_x0}, {click_y0}), Password ({click_x1}, {click_y1})")
+                        # Sử dụng tọa độ tỷ lệ phần trăm (Username ở 59% chiều cao, Password ở 69% chiều cao)
+                        click_x0 = rect['x'] + int(rect['w'] * 0.5)
+                        click_y0 = rect['y'] + int(rect['h'] * 0.59)
+                        click_x1 = rect['x'] + int(rect['w'] * 0.5)
+                        click_y1 = rect['y'] + int(rect['h'] * 0.69)
+                        self.log(f"Sử dụng tọa độ tỷ lệ phần trăm: Username ({click_x0}, {click_y0}), Password ({click_x1}, {click_y1})")
+
                     
                     pyautogui.click(click_x0, click_y0)
                     time.sleep(0.1)
