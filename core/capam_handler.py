@@ -92,6 +92,8 @@ class CAPAMHandler:
         Returns: (rect, fields) hoặc (None, []) nếu timeout.
         """
         for attempt in range(max_wait):
+            self.adapter.focus_window(CAPAM_WINDOW_TITLE)
+            time.sleep(0.2)
             rect = self.adapter.get_window_rect(CAPAM_WINDOW_TITLE)
             if rect:
                 fields = self._detect_fields(rect, self._debug_address)
@@ -143,6 +145,8 @@ class CAPAMHandler:
         Returns: (rect, fields) hoặc (None, []) nếu timeout.
         """
         for attempt in range(max_wait):
+            self.adapter.focus_window(CAPAM_WINDOW_TITLE)
+            time.sleep(0.2)
             rect = self.adapter.get_window_rect(CAPAM_WINDOW_TITLE)
             if rect:
                 fields = self._detect_fields(rect, self._debug_login)
