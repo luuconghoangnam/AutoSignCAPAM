@@ -21,6 +21,24 @@ class LinuxAdapter(OSAdapter):
         except Exception:
             return False
 
+    def focus_rect(self, rect: dict) -> bool:
+        window_id = rect.get("id")
+        if not window_id:
+            return False
+        try:
+            subprocess.run(["wmctrl", "-i", "-a", str(window_id)], check=False)
+            time.sleep(0.1)
+            return self.is_foreground(rect)
+        except Exception:
+            return False
+
+    def is_foreground(self, rect: dict) -> bool:
+        try:
+            active = subprocess.check_output(["xdotool", "getactivewindow"]).decode().strip()
+            return int(active) == int(str(rect.get("id")), 16)
+        except Exception:
+            return False
+
     def get_window_rect(self, title_keyword: str, exact: bool = False) -> dict | None:
         try:
             out = subprocess.check_output(["wmctrl", "-l", "-G"]).decode("utf-8")

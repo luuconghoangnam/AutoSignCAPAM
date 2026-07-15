@@ -57,25 +57,57 @@ def _force_foreground(hwnd) -> bool:
     try:
         import ctypes
         user32 = ctypes.windll.user32
-        # Attach thread input để vượt qua Windows focus-stealing prevention
+        kernel32 = ctypes.windll.kernel32
+
+        # 1. Khôi phục nếu cửa sổ đang bị thu nhỏ (minimized)
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        else:
+            user32.ShowWindow(hwnd, 5)  # SW_SHOW
+
+        # 2. Bỏ qua focus-stealing prevention bằng cách mô phỏng nhấn phím ALT (VK_MENU = 0x12)
+        # Điều này cho phép tiến trình hiện tại được quyền set foreground window
+        user32.keybd_event(0x12, 0, 0, 0)      # ALT down
+        user32.keybd_event(0x12, 0, 2, 0)      # ALT up
+
+        # 3. Đưa cửa sổ lên trên cùng của Z-order bằng SetWindowPos
+        # HWND_TOPMOST = -1, HWND_NOTOPMOST = -2
+        # SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_SHOWWINDOW = 0x0040
+        user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040)
+        user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040)
+
+        # 4. Attach thread input của tiến trình Python hiện tại vào foreground thread và target thread
+        current_thread = kernel32.GetCurrentThreadId()
         foreground_thread = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)
         target_thread = user32.GetWindowThreadProcessId(hwnd, None)
-        attached = foreground_thread != target_thread
-        if attached:
-            user32.AttachThreadInput(foreground_thread, target_thread, True)
+
+        attached_fore = False
+        attached_target = False
+
+        if foreground_thread and current_thread != foreground_thread:
+            attached_fore = bool(user32.AttachThreadInput(current_thread, foreground_thread, True))
+        if target_thread and current_thread != target_thread:
+            attached_target = bool(user32.AttachThreadInput(current_thread, target_thread, True))
+
         try:
-            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            # 5. Set foreground và Bring to top
             user32.BringWindowToTop(hwnd)
             user32.SetForegroundWindow(hwnd)
-            deadline = time.monotonic() + 0.3
+            user32.SetFocus(hwnd)
+
+            # Chờ cửa sổ thực sự lên foreground
+            deadline = time.monotonic() + 0.5
             while time.monotonic() < deadline:
                 if user32.GetForegroundWindow() == hwnd:
                     return True
                 time.sleep(0.02)
             return user32.GetForegroundWindow() == hwnd
         finally:
-            if attached:
-                user32.AttachThreadInput(foreground_thread, target_thread, False)
+            # Detach threads
+            if attached_target:
+                user32.AttachThreadInput(current_thread, target_thread, False)
+            if attached_fore:
+                user32.AttachThreadInput(current_thread, foreground_thread, False)
     except Exception:
         return False
 

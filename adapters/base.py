@@ -19,6 +19,14 @@ class OSAdapter:
         """
         return False
 
+    def focus_rect(self, rect: dict) -> bool:
+        """Focus exact window instance represented by rect/HWND."""
+        return False
+
+    def is_foreground(self, rect: dict) -> bool:
+        """Return whether exact window instance currently owns foreground."""
+        return True
+
     def get_window_rect(self, title_keyword: str, exact: bool = False) -> dict | None:
         """Lấy vị trí và kích thước của cửa sổ.
 
