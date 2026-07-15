@@ -129,10 +129,25 @@ class AutomationWorker(QThread):
         self._log("Đang khởi động Broadcom CAPAM Client...")
         if not self._capam.launch_and_wait():
             self._log("Không tìm thấy cửa sổ CAPAM Client. Tiếp tục với bước đăng nhập thủ công.")
+        return "CAPAM_ADDRESS"
+
+    def _state_capam_address(self) -> str:
+        """State 3b: Nhập IP trên màn hình Address của CAPAM."""
+        self._log(f"Đang chờ màn hình Address CAPAM để nhập IP '{self.capam_ip}'...")
+        rect, fields = self._capam.wait_for_address_screen()
+        if not rect:
+            self._log("Lỗi: Không tìm thấy màn hình Address của CAPAM.")
+            return "ERROR"
+        self._adapter.focus_window("Symantec Privileged Access Manager")
+        time.sleep(0.3)
+        success = self._capam.enter_ip(rect, fields)
+        if not success:
+            return "ERROR"
         return "CAPAM_LOGIN"
 
     def _state_capam_login(self) -> str:
-        """State 4: Đăng nhập CAPAM."""
+        """State 4: Chờ màn hình Login và điền Username + Password."""
+        self._log("Đang chờ màn hình đăng nhập CAPAM (Username + Password)...")
         rect, fields = self._capam.wait_for_login_screen()
         if not rect:
             self._log("Lỗi: Không tìm thấy màn hình đăng nhập CAPAM.")
@@ -210,8 +225,12 @@ class AutomationWorker(QThread):
             elif state == "CAPAM_LAUNCH":
                 state = self._state_capam_launch()
 
+            elif state == "CAPAM_ADDRESS":
+                state = self._state_capam_address()
+
             elif state == "CAPAM_LOGIN":
                 state = self._state_capam_login()
+
 
             elif state == "RDP_WAIT_LIST":
                 state = self._state_rdp_wait_list()
