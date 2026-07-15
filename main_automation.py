@@ -494,7 +494,7 @@ class AutomationWorker(QThread):
                 if state == "PORTAL":
                     self.log("Nhận diện: MÀN HÌNH PORTAL GP.")
                     fields = self.detect_gp_fields(rect)
-                    if len(fields) >= 1:
+                    if len(fields) == 2:
                         fx, fy, fw, fh = fields[0]
                         click_x = rect['x'] + fx + fw // 2
                         click_y = rect['y'] + fy + fh // 2
@@ -521,7 +521,7 @@ class AutomationWorker(QThread):
                 elif state == "CREDENTIALS":
                     self.log("Nhận diện: MÀN HÌNH ĐĂNG NHẬP GP.")
                     fields = self.detect_gp_fields(rect)
-                    if len(fields) >= 2:
+                    if len(fields) == 3:
                         fx0, fy0, fw0, fh0 = fields[0]
                         click_x0 = rect['x'] + fx0 + fw0 // 2
                         click_y0 = rect['y'] + fy0 + fh0 // 2
