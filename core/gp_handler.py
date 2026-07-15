@@ -13,7 +13,8 @@ import pyautogui
 
 from adapters.base import OSAdapter
 from vision.field_detector import detect_input_fields
-from config import GP_PORTAL_URL
+from config import GP_PORTAL_URL, write_text_safely
+
 
 
 # --- Các trạng thái có thể xảy ra ---
@@ -155,7 +156,7 @@ class GPHandler:
         time.sleep(0.1)
         pyautogui.press("backspace")
         time.sleep(0.1)
-        pyautogui.write(GP_PORTAL_URL, interval=0.03)
+        write_text_safely(GP_PORTAL_URL)
         time.sleep(0.1)
         pyautogui.press("enter")
         self._log(f"Đã nhập portal '{GP_PORTAL_URL}', chờ chuyển trang đăng nhập...")
@@ -184,7 +185,7 @@ class GPHandler:
         time.sleep(0.1)
         pyautogui.press("backspace")
         time.sleep(0.1)
-        pyautogui.write(username, interval=0.03)
+        write_text_safely(username)
         time.sleep(0.1)
 
         # Nhập password
@@ -194,8 +195,9 @@ class GPHandler:
         time.sleep(0.1)
         pyautogui.press("backspace")
         time.sleep(0.1)
-        pyautogui.write(password, interval=0.03)
+        write_text_safely(password)
         time.sleep(0.1)
+
 
     def wait_connected_or_fail(self, capam_ip: str, port: int = 443, timeout_sec: int = 25) -> str:
         """Chờ VPN kết nối hoặc phát hiện lỗi xác thực.

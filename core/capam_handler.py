@@ -8,6 +8,7 @@ import pyautogui
 
 from adapters.base import OSAdapter
 from vision.field_detector import detect_input_fields
+from config import write_text_safely
 
 
 CAPAM_WINDOW_TITLE = "Symantec Privileged Access Manager"
@@ -93,7 +94,7 @@ class CAPAMHandler:
         time.sleep(0.1)
         pyautogui.press("backspace")
         time.sleep(0.1)
-        pyautogui.write(username, interval=0.03)
+        write_text_safely(username)
         self._log(f"Đã nhập tài khoản CAPAM: {username}")
 
         # Password
@@ -103,7 +104,7 @@ class CAPAMHandler:
         time.sleep(0.1)
         pyautogui.press("backspace")
         time.sleep(0.1)
-        pyautogui.write(password, interval=0.03)
+        write_text_safely(password)
         self._log("Đã nhập mật khẩu CAPAM.")
 
         time.sleep(0.3)
