@@ -81,66 +81,84 @@ class LinuxAdapter(OSAdapter):
         subprocess.Popen([os.path.expanduser("~/CAPAMClient/CAPAMClient")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
     def launch_gp_ui(self):
-        # 1. Đảm bảo system service 'gpd' (PanGPS daemon) đang chạy
+        GP_UI  = "/opt/paloaltonetworks/globalprotect/PanGPUI"
+        GP_AGENT = "/opt/paloaltonetworks/globalprotect/PanGPA"
+
+        # ──────────────────────────────────────────────
+        # Bước 1: Đảm bảo dịch vụ hệ thống 'gpd' (PanGPS) đang chạy
+        # Nếu chưa → dùng pkexec để hiện popup nhập mật khẩu đồ hoạ
+        # ──────────────────────────────────────────────
         try:
-            res_gpd = subprocess.run(["systemctl", "is-active", "gpd"], capture_output=True, text=True)
-            if res_gpd.stdout.strip() != "active":
-                # Gọi systemctl start gpd (KDE/polkit sẽ tự hiển thị popup GUI đòi mật khẩu root)
-                subprocess.Popen(["systemctl", "start", "gpd"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                # Chờ một lúc cho user nhập mật khẩu hoặc service khởi động
+            res = subprocess.run(["systemctl", "is-active", "gpd"],
+                                 capture_output=True, text=True)
+            if res.stdout.strip() != "active":
+                # pkexec sẽ tự mở KDE Polkit GUI hỏi mật khẩu root
+                proc = subprocess.Popen(
+                    ["pkexec", "systemctl", "start", "gpd"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+                # Chờ tối đa 30 giây để user nhập xong mật khẩu & service khởi động
+                for _ in range(30):
+                    time.sleep(1)
+                    chk = subprocess.run(["systemctl", "is-active", "gpd"],
+                                         capture_output=True, text=True)
+                    if chk.stdout.strip() == "active":
+                        break
+        except Exception:
+            pass
+
+        # ──────────────────────────────────────────────
+        # Bước 2: Đảm bảo user-agent 'gpa' đang chạy
+        # ──────────────────────────────────────────────
+        try:
+            res_gpa = subprocess.run(["systemctl", "--user", "is-active", "gpa"],
+                                     capture_output=True, text=True)
+            if res_gpa.stdout.strip() != "active":
+                if os.path.exists(GP_AGENT):
+                    subprocess.Popen([GP_AGENT, "start"],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    subprocess.run(["systemctl", "--user", "start", "gpa"], check=False)
                 time.sleep(2)
         except Exception:
             pass
 
-        # 2. Đảm bảo user service 'gpa' (PanGPA agent) đang chạy
-        try:
-            res_gpa = subprocess.run(["systemctl", "--user", "is-active", "gpa"], capture_output=True, text=True)
-            if res_gpa.stdout.strip() != "active":
-                subprocess.run(["systemctl", "--user", "start", "gpa"], check=False)
-                time.sleep(1)
-        except Exception:
-            pass
-
-        # 3. Kích hoạt giao diện UI
+        # ──────────────────────────────────────────────
+        # Bước 3: Kích hoạt cửa sổ GlobalProtect
+        # Thử qua DBus trước (nếu PanGPUI đã ở system tray), sau đó fallback
+        # ──────────────────────────────────────────────
         try:
             import dbus
             bus = dbus.SessionBus()
-            watcher_obj = bus.get_object('org.kde.StatusNotifierWatcher', '/StatusNotifierWatcher')
+            watcher_obj = bus.get_object('org.kde.StatusNotifierWatcher',
+                                          '/StatusNotifierWatcher')
             watcher = dbus.Interface(watcher_obj, 'org.freedesktop.DBus.Properties')
-            items = watcher.Get('org.kde.StatusNotifierWatcher', 'RegisteredStatusNotifierItems')
+            items = watcher.Get('org.kde.StatusNotifierWatcher',
+                                'RegisteredStatusNotifierItems')
             for item in items:
                 parts = item.split('/', 1)
                 bus_name = parts[0]
                 path = '/' + parts[1] if len(parts) > 1 else '/StatusNotifierItem'
                 item_obj = bus.get_object(bus_name, path)
                 props = dbus.Interface(item_obj, 'org.freedesktop.DBus.Properties')
-                if props.Get('org.kde.StatusNotifierItem', 'Id') == 'PanGPUI':
-                    notifier = dbus.Interface(item_obj, 'org.kde.StatusNotifierItem')
-                    notifier.Activate(0, 0)
-                    return True
+                try:
+                    if props.Get('org.kde.StatusNotifierItem', 'Id') == 'PanGPUI':
+                        notifier = dbus.Interface(item_obj, 'org.kde.StatusNotifierItem')
+                        notifier.Activate(0, 0)
+                        return True
+                except Exception:
+                    pass
         except Exception:
             pass
-            
-        # Fallback paths cho Linux
-        linux_paths = [
-            "/opt/paloaltonetworks/globalprotect/PanGPUI",
-            "/usr/bin/globalprotect"
-        ]
-        
-        launched = False
-        for path in linux_paths:
-            if os.path.exists(path):
-                if "PanGPUI" in path:
-                    subprocess.Popen([path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                else:
-                    subprocess.Popen([path, "launch-ui"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                launched = True
-                break
-                
-        if not launched:
-            # Chạy qua bash nếu không tìm thấy path tuyệt đối
-            subprocess.Popen(["globalprotect", "launch-ui"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
+
+        # Fallback: gọi thẳng PanGPUI với tham số "start from-cli" để cửa sổ hiện ra
+        if os.path.exists(GP_UI):
+            subprocess.Popen([GP_UI, "start", "from-cli"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.Popen(["globalprotect", "launch-ui"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
         return True
 
     def get_gp_log_path(self):
