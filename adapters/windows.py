@@ -53,25 +53,19 @@ def _find_capam_in_registry() -> str | None:
 
 
 def _force_foreground(hwnd) -> bool:
-    """Dùng Win32 API để force cửa sổ lên foreground, vượt qua UIPI."""
+    """Activate target without temporary topmost or global Z-order churn."""
     try:
         import ctypes
         user32 = ctypes.windll.user32
 
-        # 1. Khôi phục nếu cửa sổ đang bị thu nhỏ (minimized)
+        if not user32.IsWindow(hwnd) or not user32.IsWindowVisible(hwnd):
+            return False
+        if user32.GetForegroundWindow() == hwnd:
+            return True
+
         if user32.IsIconic(hwnd):
             user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-        else:
-            user32.ShowWindow(hwnd, 5)  # SW_SHOW
 
-        # 2. Đưa cửa sổ lên trên cùng của Z-order bằng SetWindowPos
-        # HWND_TOPMOST = -1, HWND_NOTOPMOST = -2
-        # SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_SHOWWINDOW = 0x0040
-        user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040)
-        user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0040)
-
-        # 3. Set foreground và Bring to top
-        user32.BringWindowToTop(hwnd)
         user32.SetForegroundWindow(hwnd)
 
         # Chờ cửa sổ thực sự lên foreground
@@ -159,10 +153,12 @@ class WindowsAdapter(OSAdapter):
         windows = gw.getWindowsWithTitle(title_keyword)
         if exact or title_keyword == "GlobalProtect":
             windows = [window for window in windows if window.title == title_keyword]
+
         windows = [
             window for window in windows
             if not window.isMinimized and window.width > 0 and window.height > 0
         ]
+
         if not windows:
             return None
 
@@ -189,20 +185,7 @@ class WindowsAdapter(OSAdapter):
             hwnd = getattr(win, "_hWnd", None)
             if hwnd and ctypes.windll.user32.GetForegroundWindow() == hwnd:
                 return True
-            for _ in range(3):
-                if hwnd and _force_foreground(hwnd):
-                    return True
-                time.sleep(0.05)
-            # Fallback: pygetwindow activate
-            if win.isMinimized:
-                win.restore()
-            win.activate()
-            deadline = time.monotonic() + 0.3
-            while time.monotonic() < deadline:
-                if not hwnd or ctypes.windll.user32.GetForegroundWindow() == hwnd:
-                    return True
-                time.sleep(0.02)
-            return not hwnd or ctypes.windll.user32.GetForegroundWindow() == hwnd
+            return bool(hwnd and _force_foreground(hwnd))
         except Exception:
             return False
 
@@ -212,13 +195,9 @@ class WindowsAdapter(OSAdapter):
             return False
         try:
             import ctypes
-            if ctypes.windll.user32.GetForegroundWindow() == hwnd:
-                return True
-            for _ in range(3):
-                if _force_foreground(hwnd):
-                    return True
-                time.sleep(0.05)
-            return ctypes.windll.user32.GetForegroundWindow() == hwnd
+            if ctypes.windll.user32.IsWindow(hwnd) == 0:
+                return False
+            return _force_foreground(hwnd)
         except Exception:
             return False
 
