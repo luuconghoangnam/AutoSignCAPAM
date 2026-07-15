@@ -96,7 +96,7 @@ def detect_input_fields(
     if debug_img is not None and debug_output_path:
         cv2.imwrite(debug_output_path, debug_img)
 
-    return sorted(fields, key=lambda f: f[1])
+    return sorted(fields, key=lambda f: (f[1], f[0]))
 
 
 def _pixel_fallback(

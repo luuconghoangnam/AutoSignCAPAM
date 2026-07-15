@@ -2,11 +2,26 @@
 vision/template_matcher.py — Tìm và click nút RDP trong danh sách CAPAM
 """
 import os
-import gc
+from functools import lru_cache
+
 import cv2
 import numpy as np
 
 from config import get_resource_path
+
+
+@lru_cache(maxsize=8)
+def _load_template(path: str, modified_ns: int) -> np.ndarray | None:
+    """Cache ảnh template; mtime trong key tự vô hiệu cache khi file thay đổi."""
+    return cv2.imread(path)
+
+
+def _get_template(path: str) -> np.ndarray | None:
+    try:
+        modified_ns = os.stat(path).st_mtime_ns
+    except OSError:
+        return None
+    return _load_template(path, modified_ns)
 
 
 def find_device_rdp_button(
@@ -33,11 +48,18 @@ def find_device_rdp_button(
     dev_template_path = get_resource_path(dev_template_name)
     rdp_template_path = get_resource_path("template_rdp.png")
 
-    dev_template = cv2.imread(dev_template_path)
-    rdp_template = cv2.imread(rdp_template_path)
+    dev_template = _get_template(dev_template_path)
+    rdp_template = _get_template(rdp_template_path)
 
     if scene is None or dev_template is None or rdp_template is None:
         _log(f"Không thể tải ảnh template cần thiết (Choice: {device_choice}).")
+        return None
+    scene_h, scene_w = scene.shape[:2]
+    if any(
+        template.shape[0] > scene_h or template.shape[1] > scene_w
+        for template in (dev_template, rdp_template)
+    ):
+        _log("Kích thước cửa sổ nhỏ hơn ảnh template; bỏ qua frame hiện tại.")
         return None
 
     _log(f"Đang tìm nhãn thiết bị '{dev_template_name}' trên màn hình...")
@@ -46,8 +68,6 @@ def find_device_rdp_button(
 
     if max_val_dev < 0.65:
         _log(f"Không tìm thấy nhãn thiết bị {device_choice} (Độ khớp: {max_val_dev:.2f}).")
-        del dev_template, rdp_template, res_dev
-        gc.collect()
         return None
 
     dev_x, dev_y = max_loc_dev
@@ -78,9 +98,6 @@ def find_device_rdp_button(
         if dist_y < 45 and dist_y < min_dist_y:
             min_dist_y = dist_y
             best_rdp = (pt, shape)
-
-    del dev_template, rdp_template, res_dev, res_rdp
-    gc.collect()
 
     if not best_rdp:
         _log("Không tìm thấy nút RDP cùng dòng với thiết bị đã chọn.")
