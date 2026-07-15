@@ -105,19 +105,18 @@ class RDPHandler:
                 os.remove(screenshot_tmp)
             except Exception:
                 pass
-            if len(fields) >= 2:
+            if len(fields) >= 1:
                 break
             self._log(f"Đang chờ ô nhập liệu của bảng xác thực RDP CAPAM... (Lần {attempt+1}/10)")
             time.sleep(0.5)
             
         self._log(f"Bảng xác thực RDP CAPAM: Phát hiện thấy {len(fields)} ô nhập liệu.")
 
-        if len(fields) < 2:
-            self._log("Không đủ ô nhập liệu trong bảng Windows Security.")
+        if len(fields) < 1:
+            self._log("Không tìm thấy ô nhập liệu nào trong bảng xác thực RDP CAPAM.")
             return False
 
         x0, y0, w0, h0 = fields[0]
-        x1, y1, w1, h1 = fields[1]
 
         # Username
         pyautogui.click(rect["x"] + x0 + w0 // 2, rect["y"] + y0 + h0 // 2)
@@ -128,7 +127,8 @@ class RDPHandler:
         self._log(f"Đã nhập Username Windows Security: {username}")
 
         # Password
-        pyautogui.click(rect["x"] + x1 + w1 // 2, rect["y"] + y1 + h1 // 2)
+        time.sleep(0.2)
+        pyautogui.press("tab")
         time.sleep(0.15)
         pyautogui.hotkey("ctrl", "a")
         time.sleep(0.1)

@@ -133,6 +133,7 @@ class CAPAMHandler:
         # Nhấn Enter thay vì tìm nút Connect để đơn giản và đáng tin cậy hơn
         pyautogui.press("enter")
         self._log(f"Đã nhập IP '{self.capam_ip}' và nhấn Connect. Chờ màn hình đăng nhập...")
+        time.sleep(2.5)  # Chờ màn hình chuyển đổi sang trạng thái Login
         return True
 
     # ------------------------------------------------------------------
@@ -150,7 +151,7 @@ class CAPAMHandler:
             rect = self.adapter.get_window_rect(CAPAM_WINDOW_TITLE)
             if rect:
                 fields = self._detect_fields(rect, self._debug_login)
-                if len(fields) >= 2:
+                if len(fields) >= 1:
                     self._log(
                         f"[Login] Màn hình đăng nhập sẵn sàng — {len(fields)} ô nhập liệu "
                         f"sau {attempt + 1} giây."
@@ -165,17 +166,14 @@ class CAPAMHandler:
         fields[0] = Username, fields[1] = Password (sắp xếp từ trên xuống dưới).
         Returns: True nếu hoàn tất điền thông tin.
         """
-        if len(fields) < 2:
-            self._log("[Login] Không đủ ô nhập liệu để điền thông tin CAPAM.")
+        if len(fields) < 1:
+            self._log("[Login] Không tìm thấy ô nhập liệu nào để điền thông tin CAPAM.")
             return False
 
         x0, y0, w0, h0 = fields[0]
-        x1, y1, w1, h1 = fields[1]
 
         click_x0 = rect["x"] + x0 + w0 // 2
         click_y0 = rect["y"] + y0 + h0 // 2
-        click_x1 = rect["x"] + x1 + w1 // 2
-        click_y1 = rect["y"] + y1 + h1 // 2
 
         # Username
         pyautogui.click(click_x0, click_y0)
@@ -187,8 +185,9 @@ class CAPAMHandler:
         write_text_safely(username)
         self._log(f"[Login] Đã nhập tài khoản CAPAM: {username}")
 
-        # Password
-        pyautogui.click(click_x1, click_y1)
+        # Password (sử dụng phím TAB để chuyển ô, tránh lỗi OpenCV không nhận diện được ô có chứa sẵn dấu chấm đen)
+        time.sleep(0.2)
+        pyautogui.press("tab")
         time.sleep(0.1)
         pyautogui.hotkey("ctrl", "a")
         time.sleep(0.1)
