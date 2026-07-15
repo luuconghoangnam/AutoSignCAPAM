@@ -233,6 +233,33 @@ class WindowsAdapter(OSAdapter):
         except Exception:
             return False
 
+    def focus_rect(self, rect: dict) -> bool:
+        hwnd = rect.get("id")
+        if not hwnd:
+            return False
+        try:
+            import ctypes
+            if ctypes.windll.user32.GetForegroundWindow() == hwnd:
+                return True
+            for _ in range(3):
+                if _force_foreground(hwnd):
+                    return True
+                time.sleep(0.05)
+            return ctypes.windll.user32.GetForegroundWindow() == hwnd
+        except Exception:
+            return False
+
+    def is_foreground(self, rect: dict) -> bool:
+        hwnd = rect.get("id")
+        if not hwnd:
+            return False
+        try:
+            import ctypes
+            return ctypes.windll.user32.GetForegroundWindow() == hwnd
+        except Exception:
+            return False
+
+
     def get_window_rect(self, title_keyword: str, exact: bool = False) -> dict | None:
         try:
             win = self._find_window(title_keyword, exact)
