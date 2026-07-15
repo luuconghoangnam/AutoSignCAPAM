@@ -153,85 +153,101 @@ class GPHandler:
 
     def enter_portal_url(self, rect: dict, fields: list) -> bool:
         """Điền URL portal vào ô nhập và nhấn Connect."""
-        if not self.adapter.focus_window("GlobalProtect", exact=True):
-            self._log("[Portal] Không thể đưa GlobalProtect lên foreground.")
-            return False
-        current_rect = self.adapter.get_window_rect("GlobalProtect", exact=True)
-        if not current_rect or any(
-            rect.get(key) != current_rect.get(key) for key in ("id", "w", "h")
-        ):
-            self._log("[Portal] Cửa sổ GlobalProtect đã thay đổi; bỏ tọa độ cũ.")
-            return False
-        rect = current_rect
-        if fields:
-            x0, y0, w0, h0 = fields[0]
-            click_x = rect["x"] + x0 + w0 // 2
-            click_y = rect["y"] + y0 + h0 // 2
-            self._log(f"[Portal] Dùng tọa độ OpenCV: ({click_x}, {click_y})")
-        else:
-            click_x = rect["x"] + int(rect["w"] * 0.5)
-            click_y = rect["y"] + int(rect["h"] * 0.78)
-            self._log(f"[Portal] Dùng tọa độ tỷ lệ %: ({click_x}, {click_y})")
+        for attempt in range(3):
+            if attempt > 0:
+                self._log(f"[Portal] Thử lại nhập portal lần {attempt + 1}...")
 
-        pyautogui.click(click_x, click_y)
-        time.sleep(0.1)
-        pyautogui.hotkey("ctrl", "a")
-        time.sleep(0.1)
-        pyautogui.press("backspace")
-        time.sleep(0.1)
-        write_text_safely(GP_PORTAL_URL)
-        time.sleep(0.1)
-        pyautogui.press("enter")
-        self._log(f"Đã nhập portal '{GP_PORTAL_URL}', chờ chuyển trang đăng nhập...")
-        return True
+            if not self.adapter.focus_window("GlobalProtect", exact=True):
+                self._log("[Portal] Không thể đưa GlobalProtect lên foreground.")
+                time.sleep(0.5)
+                continue
+            current_rect = self.adapter.get_window_rect("GlobalProtect", exact=True)
+            if not current_rect or any(
+                rect.get(key) != current_rect.get(key) for key in ("id", "w", "h")
+            ):
+                self._log("[Portal] Cửa sổ GlobalProtect đã thay đổi; bỏ tọa độ cũ.")
+                return False
+            rect = current_rect
+            if fields:
+                x0, y0, w0, h0 = fields[0]
+                click_x = rect["x"] + x0 + w0 // 2
+                click_y = rect["y"] + y0 + h0 // 2
+                self._log(f"[Portal] Dùng tọa độ OpenCV: ({click_x}, {click_y})")
+            else:
+                click_x = rect["x"] + int(rect["w"] * 0.5)
+                click_y = rect["y"] + int(rect["h"] * 0.78)
+                self._log(f"[Portal] Dùng tọa độ tỷ lệ %: ({click_x}, {click_y})")
+
+            pyautogui.click(click_x, click_y)
+            time.sleep(0.1)
+            pyautogui.hotkey("ctrl", "a")
+            time.sleep(0.1)
+            pyautogui.press("backspace")
+            time.sleep(0.1)
+            write_text_safely(GP_PORTAL_URL)
+            time.sleep(0.1)
+            pyautogui.press("enter")
+            self._log(f"Đã nhập portal '{GP_PORTAL_URL}', chờ chuyển trang đăng nhập...")
+            return True
+            
+        self._log("[Portal] Thất bại sau 3 lần thử nhập portal.")
+        return False
 
     def enter_credentials(self, rect: dict, fields: list, username: str, password: str) -> bool:
         """Điền tài khoản và mật khẩu vào màn hình đăng nhập GP."""
-        if not self.adapter.focus_window("GlobalProtect", exact=True):
-            self._log("[Credentials] Không thể đưa GlobalProtect lên foreground.")
-            return False
-        current_rect = self.adapter.get_window_rect("GlobalProtect", exact=True)
-        if not current_rect or any(
-            rect.get(key) != current_rect.get(key) for key in ("id", "w", "h")
-        ):
-            self._log("[Credentials] Cửa sổ GlobalProtect đã thay đổi; bỏ tọa độ cũ.")
-            return False
-        rect = current_rect
-        if len(fields) >= 2:
-            x0, y0, w0, h0 = fields[0]
-            click_x0 = rect["x"] + x0 + w0 // 2
-            click_y0 = rect["y"] + y0 + h0 // 2
-            x1, y1, w1, h1 = fields[1]
-            click_x1 = rect["x"] + x1 + w1 // 2
-            click_y1 = rect["y"] + y1 + h1 // 2
-            self._log(f"[Credentials] OpenCV — User: ({click_x0}, {click_y0}), Pass: ({click_x1}, {click_y1})")
-        else:
-            click_x0 = rect["x"] + int(rect["w"] * 0.5)
-            click_y0 = rect["y"] + int(rect["h"] * 0.59)
-            click_x1 = rect["x"] + int(rect["w"] * 0.5)
-            click_y1 = rect["y"] + int(rect["h"] * 0.69)
-            self._log(f"[Credentials] Tỷ lệ % — User: ({click_x0}, {click_y0}), Pass: ({click_x1}, {click_y1})")
+        for attempt in range(3):
+            if attempt > 0:
+                self._log(f"[Credentials] Thử lại đăng nhập GP lần {attempt + 1}...")
 
-        # Nhập username
-        pyautogui.click(click_x0, click_y0)
-        time.sleep(0.1)
-        pyautogui.hotkey("ctrl", "a")
-        time.sleep(0.1)
-        pyautogui.press("backspace")
-        time.sleep(0.1)
-        write_text_safely(username)
-        time.sleep(0.1)
+            if not self.adapter.focus_window("GlobalProtect", exact=True):
+                self._log("[Credentials] Không thể đưa GlobalProtect lên foreground.")
+                time.sleep(0.5)
+                continue
+            current_rect = self.adapter.get_window_rect("GlobalProtect", exact=True)
+            if not current_rect or any(
+                rect.get(key) != current_rect.get(key) for key in ("id", "w", "h")
+            ):
+                self._log("[Credentials] Cửa sổ GlobalProtect đã thay đổi; bỏ tọa độ cũ.")
+                return False
+            rect = current_rect
+            if len(fields) >= 2:
+                x0, y0, w0, h0 = fields[0]
+                click_x0 = rect["x"] + x0 + w0 // 2
+                click_y0 = rect["y"] + y0 + h0 // 2
+                x1, y1, w1, h1 = fields[1]
+                click_x1 = rect["x"] + x1 + w1 // 2
+                click_y1 = rect["y"] + y1 + h1 // 2
+                self._log(f"[Credentials] OpenCV — User: ({click_x0}, {click_y0}), Pass: ({click_x1}, {click_y1})")
+            else:
+                click_x0 = rect["x"] + int(rect["w"] * 0.5)
+                click_y0 = rect["y"] + int(rect["h"] * 0.59)
+                click_x1 = rect["x"] + int(rect["w"] * 0.5)
+                click_y1 = rect["y"] + int(rect["h"] * 0.69)
+                self._log(f"[Credentials] Tỷ lệ % — User: ({click_x0}, {click_y0}), Pass: ({click_x1}, {click_y1})")
 
-        # Nhập password
-        pyautogui.click(click_x1, click_y1)
-        time.sleep(0.1)
-        pyautogui.hotkey("ctrl", "a")
-        time.sleep(0.1)
-        pyautogui.press("backspace")
-        time.sleep(0.1)
-        write_text_safely(password)
-        time.sleep(0.1)
-        return True
+            # Nhập username
+            pyautogui.click(click_x0, click_y0)
+            time.sleep(0.1)
+            pyautogui.hotkey("ctrl", "a")
+            time.sleep(0.1)
+            pyautogui.press("backspace")
+            time.sleep(0.1)
+            write_text_safely(username)
+            time.sleep(0.1)
+
+            # Nhập password
+            pyautogui.click(click_x1, click_y1)
+            time.sleep(0.1)
+            pyautogui.hotkey("ctrl", "a")
+            time.sleep(0.1)
+            pyautogui.press("backspace")
+            time.sleep(0.1)
+            write_text_safely(password)
+            time.sleep(0.1)
+            return True
+            
+        self._log("[Credentials] Thất bại sau 3 lần thử nhập thông tin đăng nhập GP.")
+        return False
 
 
     def wait_connected_or_fail(self, capam_ip: str, port: int = 443, timeout_sec: int = 25) -> str:

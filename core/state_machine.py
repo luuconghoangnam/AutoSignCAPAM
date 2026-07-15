@@ -6,7 +6,6 @@ Mỗi state là một phương thức riêng biệt trả về state tiếp theo
 """
 import time
 
-import pyautogui
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from adapters import get_os_adapter
@@ -77,7 +76,9 @@ class AutomationWorker(QThread):
         """State 2a: Khởi động UI GlobalProtect và ghi nhận log offset."""
         self._log("Bắt đầu kích hoạt GlobalProtect...")
         self._gp.init_log_offset()
-        self._adapter.launch_gp_ui()
+        if not self._adapter.launch_gp_ui():
+            self._log("Không tìm thấy hoặc không thể kích hoạt GlobalProtect.")
+            return "ERROR"
         return "GP_DETECT"
 
     def _state_gp_detect(self, attempt: int) -> str:
@@ -143,7 +144,9 @@ class AutomationWorker(QThread):
                 return "GP_DETECT"
             self._gp.mark_log_before_submit()
             self._log("Gửi thông tin đăng nhập GlobalProtect...")
-            pyautogui.press("enter")
+            if not self._gp.submit_credentials(rect):
+                time.sleep(0.5)
+                return "GP_DETECT"
             return "GP_WAIT_CONNECT"
 
         elif state == STATE_CONNECTED:
@@ -232,6 +235,7 @@ class AutomationWorker(QThread):
     # ------------------------------------------------------------------
 
     def run(self) -> None:
+        import pyautogui
         pyautogui.PAUSE = 0.1
         state = "RESET_CAPAM"
         gp_attempts = 0
