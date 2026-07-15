@@ -239,46 +239,42 @@ class RDPHandler:
             self._log("Không tìm thấy ô nhập liệu nào trong bảng xác thực RDP CAPAM.")
             return False
 
-        if not self.adapter.focus_rect(rect):
-            self._log("Không thể đưa overlay xác thực lên foreground trước khi nhập.")
-            return False
-        current_rect = self.adapter.get_window_rect(window_title, exact=True)
-        if not self._same_rect(rect, current_rect or {}):
-            self._log("Bảng xác thực đã di chuyển hoặc thay đổi; không nhập thông tin vào tọa độ cũ.")
-            return False
+        for attempt in range(3):
+            if attempt > 0:
+                self._log(f"Thử lại điền Windows Security lần {attempt + 1}...")
 
-        x0, y0, w0, h0 = fields[0]
+            if not self.adapter.focus_rect(rect):
+                self._log("Không thể đưa overlay xác thực lên foreground trước khi nhập.")
+                time.sleep(0.5)
+                continue
+            current_rect = self.adapter.get_window_rect(window_title, exact=True)
+            if not self._same_rect(rect, current_rect or {}):
+                self._log("Bảng xác thực đã di chuyển hoặc thay đổi; không nhập thông tin vào tọa độ cũ.")
+                return False
 
-        # Username
-        pyautogui.click(rect["x"] + x0 + w0 // 2, rect["y"] + y0 + h0 // 2)
-        time.sleep(0.15)
-        if not self.adapter.is_foreground(rect):
-            self._log("Foreground đổi sau click Username Windows Security; dừng nhập.")
-            return False
-        pyautogui.hotkey("ctrl", "a")
-        time.sleep(0.1)
-        write_text_safely(username)
-        self._log(f"Đã nhập Username Windows Security: {username}")
+            x0, y0, w0, h0 = fields[0]
 
-        # Password
-        time.sleep(0.2)
-        if not self.adapter.is_foreground(rect):
-            self._log("Foreground đổi trước khi nhập Password Windows Security; dừng nhập.")
-            return False
-        pyautogui.press("tab")
-        time.sleep(0.15)
-        if not self.adapter.is_foreground(rect):
-            self._log("Foreground đổi sau Tab Windows Security; dừng nhập Password.")
-            return False
-        pyautogui.hotkey("ctrl", "a")
-        time.sleep(0.1)
-        write_text_safely(password)
-        self._log("Đã nhập Password Windows Security.")
+            # Username
+            pyautogui.click(rect["x"] + x0 + w0 // 2, rect["y"] + y0 + h0 // 2)
+            time.sleep(0.15)
+            pyautogui.hotkey("ctrl", "a")
+            time.sleep(0.1)
+            write_text_safely(username)
+            self._log(f"Đã nhập Username Windows Security: {username}")
 
-        time.sleep(0.3)
-        if not self.adapter.is_foreground(rect):
-            self._log("Foreground đã bị cửa sổ khác chiếm; không nhấn Enter Windows Security.")
-            return False
-        pyautogui.press("enter")
-        self._log("Đã nhấn Login Windows Security — kết nối RDP đang thiết lập!")
-        return True
+            # Password
+            time.sleep(0.2)
+            pyautogui.press("tab")
+            time.sleep(0.15)
+            pyautogui.hotkey("ctrl", "a")
+            time.sleep(0.1)
+            write_text_safely(password)
+            self._log("Đã nhập Password Windows Security.")
+
+            time.sleep(0.3)
+            pyautogui.press("enter")
+            self._log("Đã nhấn Login Windows Security — kết nối RDP đang thiết lập!")
+            return True
+
+        self._log("Thất bại sau 3 lần thử nhập Windows Security.")
+        return False
