@@ -525,20 +525,28 @@ class AutomationWorker(QThread):
                 state = self.get_gp_state_from_log()
                 self.log(f"Trạng thái GlobalProtect từ log: {state}")
                 
+                # Luôn chạy quét OpenCV để lấy tọa độ các ô nhập chính xác
+                gp_fields = self.detect_gp_fields(rect)
+                self.log(f"Phát hiện thấy {len(gp_fields)} ô nhập liệu trên UI GlobalProtect.")
+                
                 if state == "UNKNOWN":
-                    # Fallback sang phát hiện bằng OpenCV contours
-                    fields = self.detect_gp_fields(rect)
-                    self.log(f"Không đọc được log, phát hiện bằng OpenCV: thấy {len(fields)} ô nhập liệu.")
-                    if len(fields) == 1:
+                    if len(gp_fields) == 1:
                         state = "PORTAL"
-                    elif len(fields) == 2:
+                    elif len(gp_fields) >= 2:
                         state = "CREDENTIALS"
                 
                 if state == "PORTAL":
                     self.log("Nhận diện: MÀN HÌNH PORTAL GP.")
-                    # Sử dụng tọa độ tương đối an toàn không đổi: Center X = 150, Center Y = 277
-                    click_x = rect['x'] + 150
-                    click_y = rect['y'] + 277
+                    if len(gp_fields) >= 1:
+                        x0, y0, w0, h0 = gp_fields[0]
+                        click_x = rect['x'] + x0 + w0 // 2
+                        click_y = rect['y'] + y0 + h0 // 2
+                        self.log(f"Sử dụng tọa độ OpenCV cho Portal: ({click_x}, {click_y})")
+                    else:
+                        # Sử dụng tọa độ tương đối an toàn không đổi: Center X = 150, Center Y = 277
+                        click_x = rect['x'] + 150
+                        click_y = rect['y'] + 277
+                        self.log(f"Sử dụng tọa độ fallback cho Portal: ({click_x}, {click_y})")
                     
                     pyautogui.click(click_x, click_y)
                     time.sleep(0.1)
@@ -557,9 +565,25 @@ class AutomationWorker(QThread):
                 elif state == "CREDENTIALS":
                     self.log("Nhận diện: MÀN HÌNH ĐĂNG NHẬP GP.")
                     
-                    # Điền Username: Tọa độ tương đối an toàn Center X = 150, Center Y = 238
-                    click_x0 = rect['x'] + 150
-                    click_y0 = rect['y'] + 238
+                    if len(gp_fields) >= 2:
+                        # Dùng tọa độ nhận diện bằng OpenCV
+                        x0, y0, w0, h0 = gp_fields[0]
+                        click_x0 = rect['x'] + x0 + w0 // 2
+                        click_y0 = rect['y'] + y0 + h0 // 2
+                        
+                        x1, y1, w1, h1 = gp_fields[1]
+                        click_x1 = rect['x'] + x1 + w1 // 2
+                        click_y1 = rect['y'] + y1 + h1 // 2
+                        self.log(f"Sử dụng tọa độ OpenCV: Username ({click_x0}, {click_y0}), Password ({click_x1}, {click_y1})")
+                    else:
+                        # Điền Username: Tọa độ tương đối an toàn Center X = 150, Center Y = 238
+                        click_x0 = rect['x'] + 150
+                        click_y0 = rect['y'] + 238
+                        # Điền Password + OTP: Tọa độ tương đối an toàn Center X = 150, Center Y = 277
+                        click_x1 = rect['x'] + 150
+                        click_y1 = rect['y'] + 277
+                        self.log(f"Sử dụng tọa độ fallback cứng: Username ({click_x0}, {click_y0}), Password ({click_x1}, {click_y1})")
+                    
                     pyautogui.click(click_x0, click_y0)
                     time.sleep(0.1)
                     pyautogui.hotkey('ctrl', 'a')
@@ -569,9 +593,6 @@ class AutomationWorker(QThread):
                     pyautogui.write(self.username, interval=0.03)
                     time.sleep(0.1)
                     
-                    # Điền Password + OTP: Tọa độ tương đối an toàn Center X = 150, Center Y = 277
-                    click_x1 = rect['x'] + 150
-                    click_y1 = rect['y'] + 277
                     pyautogui.click(click_x1, click_y1)
                     time.sleep(0.1)
                     pyautogui.hotkey('ctrl', 'a')
@@ -582,6 +603,7 @@ class AutomationWorker(QThread):
                     time.sleep(0.1)
                     
                     # Đăng nhập
+
                     self.log("Gửi thông tin đăng nhập GlobalProtect...")
                     pyautogui.press('enter')
                     
