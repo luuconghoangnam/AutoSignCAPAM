@@ -625,12 +625,13 @@ class AutomationWorker(QThread):
                     
                     # Kiểm tra kết nối mạng sau đăng nhập
                     self.log("Đang chờ xác minh kết nối mạng VPN...")
-                    if self.wait_for_network(self.capam_ip, 443, timeout=10):
+                    if self.wait_for_network(self.capam_ip, 443, timeout=25):
                         gp_success = True
                         break
                     else:
                         self.log("Đăng nhập thất bại hoặc đang tải...")
                         time.sleep(2)
+
                 elif state == "CONNECTED":
                     self.log("GlobalProtect đã được kết nối thành công từ trước.")
                     gp_success = True
