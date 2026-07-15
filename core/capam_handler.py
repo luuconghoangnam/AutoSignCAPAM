@@ -11,9 +11,12 @@ Tham khảo kiến trúc từ nhánh main (Linux) và cải tiến thêm:
   - Clipboard paste để tránh bộ gõ tiếng Việt can thiệp
 """
 import os
+import tempfile
 import time
+import uuid
 
 import pyautogui
+import cv2
 
 from adapters.base import OSAdapter
 from vision.field_detector import detect_input_fields
@@ -21,10 +24,12 @@ from config import write_text_safely
 
 
 CAPAM_WINDOW_TITLE = "Symantec Privileged Access Manager"
-
-# Sau khi nhập IP và nhấn Connect, tiêu đề cửa sổ sẽ giữ nguyên
-# nhưng giao diện bên trong chuyển sang màn hình Login
-_LOGIN_SCREEN_WAIT = 8   # Tối đa giây chờ màn hình Login xuất hiện sau khi nhấn Connect
+_POLL_INTERVAL = 0.5
+_MIN_FIELD_WIDTH_RATIO = 0.25
+_LOGIN_FIELD_WIDTH_RATIO = 0.18
+_LOGIN_FIELD_MIN_WIDTH = 100
+_STABLE_DETECTIONS = 2
+_ADDRESS_FIELD_ROI = (0.38, 0.36, 0.80, 0.64)
 
 
 class CAPAMHandler:
@@ -34,12 +39,8 @@ class CAPAMHandler:
         self.adapter = adapter
         self.capam_ip = capam_ip
         self._log = log_fn or (lambda msg: None)
-        self._screenshot_tmp = os.path.join(os.environ.get("TEMP", "/tmp"), "capam_crop.tmp.png")
-        self._debug_address = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "..", "debug_capam_address.png"
-        )
-        self._debug_login = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "..", "debug_capam_login.png"
+        self._screenshot_tmp = os.path.join(
+            tempfile.gettempdir(), f"capam_crop_{os.getpid()}_{uuid.uuid4().hex}.png"
         )
 
     # ------------------------------------------------------------------
@@ -51,14 +52,24 @@ class CAPAMHandler:
         Returns: True nếu tìm thấy cửa sổ trong thời gian chờ.
         """
         self._log("Đang khởi động CAPAM Client...")
-        self.adapter.launch_capam()
-        for i in range(max_wait):
-            time.sleep(1)
+        existing = self.adapter.get_window_rect(CAPAM_WINDOW_TITLE)
+        if existing:
+            self._log("CAPAM Client đã mở, dùng lại cửa sổ hiện có.")
+            return True
+        if not self.adapter.launch_capam():
+            self._log("Không thể khởi động CAPAM Client.")
+            return False
+        started = time.monotonic()
+        deadline = started + max_wait
+        while time.monotonic() < deadline:
             rect = self.adapter.get_window_rect(CAPAM_WINDOW_TITLE)
             if rect:
-                self._log(f"Đã phát hiện cửa sổ CAPAM Client sau {i + 1} giây.")
+                elapsed = time.monotonic() - started
+                self._log(f"Đã phát hiện cửa sổ CAPAM Client sau {elapsed:.1f} giây.")
                 return True
-            self._log(f"Đang chờ CAPAM khởi động... ({i + 1}/{max_wait}s)")
+            elapsed = time.monotonic() - started
+            self._log(f"Đang chờ CAPAM khởi động... ({elapsed:.1f}/{max_wait}s)")
+            time.sleep(min(_POLL_INTERVAL, max(0, deadline - time.monotonic())))
         self._log("Quá thời gian chờ CAPAM Client xuất hiện.")
         return False
 
@@ -66,7 +77,7 @@ class CAPAMHandler:
     # Phát hiện ô nhập liệu
     # ------------------------------------------------------------------
 
-    def _detect_fields(self, rect: dict, debug_path: str) -> list:
+    def _detect_fields(self, rect: dict) -> list:
         """Chụp ảnh cửa sổ và phát hiện ô nhập liệu bằng OpenCV."""
         try:
             self.adapter.take_screenshot(rect, self._screenshot_tmp)
@@ -75,7 +86,7 @@ class CAPAMHandler:
         fields = detect_input_fields(
             self._screenshot_tmp,
             profile="capam",
-            debug_output_path=debug_path,
+            debug_output_path=None,
         )
         try:
             os.remove(self._screenshot_tmp)
@@ -83,31 +94,118 @@ class CAPAMHandler:
             pass
         return fields
 
+    def _detect_address_field(self, rect: dict) -> list:
+        """Nhận diện ô Address; fallback theo ROI cố định của layout CAPAM."""
+        fields = self._likely_text_fields(rect, self._detect_fields(rect))
+        if fields:
+            return fields
+
+        try:
+            self.adapter.take_screenshot(rect, self._screenshot_tmp)
+            image = cv2.imread(self._screenshot_tmp)
+        except Exception:
+            image = None
+        finally:
+            try:
+                os.remove(self._screenshot_tmp)
+            except Exception:
+                pass
+
+        if image is None:
+            return []
+
+        image_h, image_w = image.shape[:2]
+        x1 = int(image_w * _ADDRESS_FIELD_ROI[0])
+        y1 = int(image_h * _ADDRESS_FIELD_ROI[1])
+        x2 = int(image_w * _ADDRESS_FIELD_ROI[2])
+        y2 = int(image_h * _ADDRESS_FIELD_ROI[3])
+        roi = image[y1:y2, x1:x2]
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+        edges = cv2.Canny(blurred, 30, 100)
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        candidates = []
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour)
+            if image_w * 0.25 <= w <= image_w * 0.45 and 16 <= h <= 40:
+                candidates.append((x1 + x, y1 + y, w, h))
+        return sorted(candidates, key=lambda field: (field[1], field[0]))
+
+    @staticmethod
+    def _likely_text_fields(rect: dict, fields: list) -> list:
+        """Loại nút và contour nhỏ; ô nhập trong các màn hình mẫu rộng >= 25% cửa sổ."""
+        min_width = rect["w"] * _MIN_FIELD_WIDTH_RATIO
+        return [field for field in fields if field[2] >= min_width]
+
+    @staticmethod
+    def _same_fields(previous: list, current: list, tolerance: int = 8) -> bool:
+        if len(previous) != len(current):
+            return False
+        return all(
+            abs(old[0] - new[0]) <= tolerance
+            and abs(old[1] - new[1]) <= tolerance
+            and abs(old[2] - new[2]) <= tolerance
+            and abs(old[3] - new[3]) <= tolerance
+            for old, new in zip(previous, current)
+        )
+
+    @staticmethod
+    def _same_rect(previous: dict | None, current: dict) -> bool:
+        if not previous:
+            return False
+        return all(previous.get(key) == current.get(key) for key in ("id", "x", "y", "w", "h"))
+
+    @staticmethod
+    def _wait_next_poll(poll_started: float, deadline: float) -> None:
+        remaining = min(deadline, poll_started + _POLL_INTERVAL) - time.monotonic()
+        if remaining > 0:
+            time.sleep(remaining)
+
     # ------------------------------------------------------------------
     # Bước 1: Màn hình Address (Nhập IP)
     # ------------------------------------------------------------------
 
-    def wait_for_address_screen(self, max_wait: int = 15) -> tuple[dict | None, list]:
+    def wait_for_address_screen(self, max_wait: int = 30) -> tuple[dict | None, list]:
         """Chờ màn hình Address của CAPAM xuất hiện với ít nhất 1 ô nhập.
         Returns: (rect, fields) hoặc (None, []) nếu timeout.
         """
-        for attempt in range(max_wait):
-            self.adapter.focus_window(CAPAM_WINDOW_TITLE)
-            time.sleep(0.2)
+        started = time.monotonic()
+        deadline = started + max_wait
+        stable_count = 0
+        previous_fields = []
+        previous_rect = None
+        while time.monotonic() < deadline:
+            poll_started = time.monotonic()
             rect = self.adapter.get_window_rect(CAPAM_WINDOW_TITLE)
             if rect:
                 ratio = rect["h"] / rect["w"]
                 # Màn hình Address dẹt hơn (ratio ~0.45). Chỉ quét khi tỷ lệ nhỏ hơn 0.55
                 if ratio < 0.55:
-                    fields = self._detect_fields(rect, self._debug_address)
+                    fields = self._detect_address_field(rect)
                     if len(fields) >= 1:
+                        unchanged = self._same_rect(previous_rect, rect) and self._same_fields(previous_fields, fields)
+                        stable_count = stable_count + 1 if unchanged else 1
+                        previous_fields = fields
+                        previous_rect = rect.copy()
+                    else:
+                        stable_count = 0
+                        previous_fields = []
+                        previous_rect = None
+                    if stable_count >= _STABLE_DETECTIONS:
+                        elapsed = time.monotonic() - started
                         self._log(
                             f"[Address] Phát hiện {len(fields)} ô trên màn hình Address "
-                            f"sau {attempt + 1} giây (Ratio: {ratio:.3f})."
+                            f"ổn định sau {elapsed:.1f} giây (Ratio: {ratio:.3f})."
                         )
                         return rect, fields
-            self._log(f"Chờ màn hình Address CAPAM... ({attempt + 1}/{max_wait}s)")
-            time.sleep(1)
+                else:
+                    stable_count = 0
+                    previous_fields = []
+                    previous_rect = None
+            elapsed = time.monotonic() - started
+            self._log(f"Chờ màn hình Address CAPAM... ({elapsed:.1f}/{max_wait}s)")
+            self._wait_next_poll(poll_started, deadline)
         return None, []
 
     def enter_ip(self, rect: dict, fields: list) -> bool:
@@ -119,54 +217,96 @@ class CAPAMHandler:
             self._log("[Address] Không tìm thấy ô Address để nhập IP.")
             return False
 
+        if not self.adapter.focus_window(CAPAM_WINDOW_TITLE):
+            self._log("[Address] Không thể đưa CAPAM lên foreground trước khi nhập.")
+            return False
+        current_rect = self.adapter.get_window_rect(CAPAM_WINDOW_TITLE)
+        if not current_rect or any(
+            rect.get(key) != current_rect.get(key) for key in ("id", "w", "h")
+        ):
+            self._log("[Address] Cửa sổ đã thay đổi kích thước hoặc instance; hủy thao tác cũ.")
+            return False
+        rect = current_rect
+
         x0, y0, w0, h0 = fields[0]
         click_x = rect["x"] + x0 + w0 // 2
         click_y = rect["y"] + y0 + h0 // 2
 
         self._log(f"[Address] Điền IP '{self.capam_ip}' vào ô tại ({click_x}, {click_y}).")
         pyautogui.click(click_x, click_y)
-        time.sleep(0.15)
+        time.sleep(0.05)
         pyautogui.hotkey("ctrl", "a")
-        time.sleep(0.1)
+        time.sleep(0.05)
         pyautogui.press("backspace")
-        time.sleep(0.1)
+        time.sleep(0.05)
         write_text_safely(self.capam_ip)
-        time.sleep(0.15)
+        time.sleep(0.1)
 
-        # Nhấn Enter thay vì tìm nút Connect để đơn giản và đáng tin cậy hơn
+        # Giữ focus trong ô Address rồi Enter; không click nút theo tọa độ để
+        # tránh nhầm nút Cancel khi layout CAPAM thay đổi.
+        pyautogui.click(click_x, click_y)
+        time.sleep(0.05)
         pyautogui.press("enter")
-        self._log(f"Đã nhập IP '{self.capam_ip}' và nhấn Connect. Chờ màn hình đăng nhập...")
-        time.sleep(2.5)  # Chờ màn hình chuyển đổi sang trạng thái Login
+        self._log(
+            f"Đã xóa và nhập lại IP '{self.capam_ip}', nhấn Enter trong ô Address. "
+            "Chờ màn hình đăng nhập..."
+        )
+        time.sleep(0.25)
         return True
 
     # ------------------------------------------------------------------
     # Bước 2: Màn hình Login (Username + Password)
     # ------------------------------------------------------------------
 
-    def wait_for_login_screen(self, max_wait: int = 15) -> tuple[dict | None, list]:
+    def wait_for_login_screen(self, max_wait: int = 30) -> tuple[dict | None, list]:
         """Chờ màn hình Login xuất hiện với ít nhất 1 ô nhập.
         Phân biệt với màn hình Address bằng cách kiểm tra tỷ lệ khung hình.
         Returns: (rect, fields) hoặc (None, []) nếu timeout.
         """
-        for attempt in range(max_wait):
-            self.adapter.focus_window(CAPAM_WINDOW_TITLE)
-            time.sleep(0.2)
+        started = time.monotonic()
+        deadline = started + max_wait
+        stable_count = 0
+        previous_fields = []
+        previous_rect = None
+        while time.monotonic() < deadline:
+            poll_started = time.monotonic()
             rect = self.adapter.get_window_rect(CAPAM_WINDOW_TITLE)
             if rect:
                 ratio = rect["h"] / rect["w"]
                 # Màn hình Login cao hơn (ratio ~0.65). Chỉ chấp nhận khi tỷ lệ >= 0.55
                 if ratio >= 0.55:
-                    fields = self._detect_fields(rect, self._debug_login)
-                    if len(fields) >= 1:
+                    raw_fields = self._detect_fields(rect)
+                    min_width = max(_LOGIN_FIELD_MIN_WIDTH, rect["w"] * _LOGIN_FIELD_WIDTH_RATIO)
+                    fields = [field for field in raw_fields if field[2] >= min_width]
+                    if raw_fields and not fields:
                         self._log(
-                            f"[Login] Màn hình đăng nhập sẵn sàng — {len(fields)} ô nhập liệu "
-                            f"sau {attempt + 1} giây (Ratio: {ratio:.3f})."
+                            f"[Login] Có contour nhưng field quá hẹp: "
+                            f"{raw_fields}; đang chờ frame ổn định tiếp theo."
+                        )
+                    if len(fields) >= 1:
+                        unchanged = self._same_rect(previous_rect, rect) and self._same_fields(previous_fields, fields)
+                        stable_count = stable_count + 1 if unchanged else 1
+                        previous_fields = fields
+                        previous_rect = rect.copy()
+                    else:
+                        stable_count = 0
+                        previous_fields = []
+                        previous_rect = None
+                    if stable_count >= _STABLE_DETECTIONS:
+                        elapsed = time.monotonic() - started
+                        self._log(
+                            f"[Login] Màn hình đăng nhập ổn định - {len(fields)} ô nhập liệu "
+                            f"sau {elapsed:.1f} giây (Ratio: {ratio:.3f})."
                         )
                         return rect, fields
                 else:
+                    stable_count = 0
+                    previous_fields = []
+                    previous_rect = None
                     self._log(f"Vẫn là màn hình Address (Ratio: {ratio:.3f}). Chờ tải màn hình Login...")
-            self._log(f"Chờ màn hình đăng nhập CAPAM... ({attempt + 1}/{max_wait}s)")
-            time.sleep(1)
+            elapsed = time.monotonic() - started
+            self._log(f"Chờ màn hình đăng nhập CAPAM... ({elapsed:.1f}/{max_wait}s)")
+            self._wait_next_poll(poll_started, deadline)
         return None, []
 
     def enter_credentials(self, rect: dict, fields: list, username: str, password: str) -> bool:
@@ -177,6 +317,17 @@ class CAPAMHandler:
         if len(fields) < 1:
             self._log("[Login] Không tìm thấy ô nhập liệu nào để điền thông tin CAPAM.")
             return False
+
+        if not self.adapter.focus_window(CAPAM_WINDOW_TITLE):
+            self._log("[Login] Không thể đưa CAPAM lên foreground trước khi nhập.")
+            return False
+        current_rect = self.adapter.get_window_rect(CAPAM_WINDOW_TITLE)
+        if not current_rect or any(
+            rect.get(key) != current_rect.get(key) for key in ("id", "w", "h")
+        ):
+            self._log("[Login] Cửa sổ đã thay đổi kích thước hoặc instance; hủy thao tác cũ.")
+            return False
+        rect = current_rect
 
         x0, y0, w0, h0 = fields[0]
 
