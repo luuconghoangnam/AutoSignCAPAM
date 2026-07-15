@@ -36,6 +36,7 @@ class AutomationWorker(QThread):
         self._gp_visual_state = STATE_UNKNOWN
         self._gp_visual_count = 0
         self._gp_portal_submitted_at = 0.0
+        self._capam_launched_early = False
 
     def _log(self, msg: str) -> None:
         self.log_signal.emit(f"[*] {msg}")
@@ -147,6 +148,13 @@ class AutomationWorker(QThread):
             if not self._gp.submit_credentials(rect):
                 time.sleep(0.5)
                 return "GP_DETECT"
+
+            self._log("Đang khởi động sớm CAPAM Client để tiết kiệm thời gian chờ VPN...")
+            if self._adapter.launch_capam():
+                self._capam_launched_early = True
+                # CAPAM may claim foreground while starting; restore GP before polling VPN.
+                self._adapter.focus_rect(rect)
+
             return "GP_WAIT_CONNECT"
 
         elif state == STATE_CONNECTED:
@@ -174,18 +182,42 @@ class AutomationWorker(QThread):
 
     def _state_capam_launch(self) -> str:
         """State 3: Khởi động CAPAM Client."""
-        self._log("Đang khởi động Broadcom CAPAM Client...")
-        if not self._capam.launch_and_wait():
-            self._log("Không tìm thấy hoặc không thể khởi động CAPAM Client.")
+        self._log("Đang chuẩn bị phiên CAPAM Client...")
+
+        if getattr(self, "_capam_launched_early", False):
+            started = time.monotonic()
+            while time.monotonic() < started + 20:
+                if self._adapter.get_window_rect("Symantec Privileged Access Manager"):
+                    return "CAPAM_ADDRESS"
+                time.sleep(0.5)
+            self._log("Lỗi: Quá thời gian chờ CAPAM Client xuất hiện.")
             return "ERROR"
+        else:
+            if not self._capam.launch_and_wait():
+                self._log("Không tìm thấy hoặc không thể khởi động CAPAM Client.")
+                return "ERROR"
+
         return "CAPAM_ADDRESS"
 
     def _state_capam_address(self) -> str:
         """State 3b: Nhập IP trên màn hình Address của CAPAM."""
+        capam_rect = self._adapter.get_window_rect("Symantec Privileged Access Manager")
+        if not capam_rect:
+            self._log("Lỗi: Cửa sổ CAPAM chưa xuất hiện sau khi VPN kết nối.")
+            return "ERROR"
+        if not self._adapter.focus_rect(capam_rect):
+            self._log("Lỗi: Không thể đưa cửa sổ CAPAM lên foreground để nhận diện Address.")
+            return "ERROR"
+        self._log("Đã đưa đúng cửa sổ CAPAM lên foreground; bắt đầu nhận diện ô Address...")
+        time.sleep(0.2)
+
         self._log(f"Đang chờ màn hình Address CAPAM để nhập IP '{self.capam_ip}'...")
         rect, fields = self._capam.wait_for_address_screen()
         if not rect:
             self._log("Lỗi: Không tìm thấy màn hình Address của CAPAM.")
+            return "ERROR"
+        if rect.get("id") != capam_rect.get("id"):
+            self._log("Lỗi: Instance CAPAM thay đổi trong lúc nhận diện; không dùng tọa độ cũ.")
             return "ERROR"
         success = self._capam.enter_ip(rect, fields)
         if not success:
