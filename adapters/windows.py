@@ -73,12 +73,32 @@ def _force_foreground(hwnd) -> bool:
 def _get_clean_env() -> dict:
     import sys
     env = os.environ.copy()
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        meipass = sys._MEIPASS
-        path_list = env.get("PATH", "").split(os.pathsep)
-        # Loại bỏ thư mục tạm _MEIPASS của PyInstaller khỏi PATH để tránh xung đột DLL (như java.dll của JDK hệ thống)
-        clean_path_list = [p for p in path_list if os.path.normpath(p) != os.path.normpath(meipass)]
+    
+    # 1. Xóa các biến môi trường liên quan đến Java hệ thống để buộc launcher dùng JRE đi kèm
+    for var in ["JAVA_HOME", "CLASSPATH", "JAVA_EXE", "JVM_PATH"]:
+        env.pop(var, None)
+        
+    # 2. Loại bỏ thư mục tạm _MEIPASS của PyInstaller và các đường dẫn JDK/JRE khỏi PATH
+    path_val = env.get("PATH", "")
+    if path_val:
+        path_list = path_val.split(os.pathsep)
+        clean_path_list = []
+        for p in path_list:
+            p_norm = os.path.normpath(p)
+            p_lower = p_norm.lower()
+            
+            # Loại bỏ _MEIPASS
+            if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+                if p_lower == os.path.normpath(sys._MEIPASS).lower():
+                    continue
+            
+            # Loại bỏ bất kỳ đường dẫn nào chứa jdk, jre, java, oracle để ngắt kết nối tới Java hệ thống
+            if "jdk" in p_lower or "jre" in p_lower or "java" in p_lower or "oracle" in p_lower:
+                continue
+                
+            clean_path_list.append(p)
         env["PATH"] = os.pathsep.join(clean_path_list)
+        
     return env
 
 
