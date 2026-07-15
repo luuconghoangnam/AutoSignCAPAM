@@ -533,9 +533,15 @@ class AutomationWorker(QThread):
                 self.log(f"Cố gắng đăng nhập GlobalProtect lần {attempt}...")
                 rect = self.os_tool.get_window_rect("GlobalProtect")
                 if not rect:
-                    self.log("Không tìm thấy cửa sổ GlobalProtect, đang thử lại...")
-                    time.sleep(1)
-                    continue
+                    self.log("Không tìm thấy cửa sổ GlobalProtect, tự động kích hoạt hiển thị lại...")
+                    self.os_tool.launch_gp_ui()
+                    time.sleep(1.5)
+                    self.os_tool.focus_window("GlobalProtect", exact=True)
+                    rect = self.os_tool.get_window_rect("GlobalProtect")
+                    if not rect:
+                        time.sleep(1)
+                        continue
+
                 
                 # Xác định trạng thái màn hình: Ưu tiên dùng file log, nếu không được mới dùng CV
                 state = self.get_gp_state_from_log()
