@@ -26,9 +26,9 @@ def get_resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 class OSAdapter:
-    gp_coords_portal = {"x": 150, "y": 277}
-    gp_coords_username = {"x": 150, "y": 238}
-    gp_coords_password = {"x": 150, "y": 277}
+    gp_coords_portal = {"x_ratio": 0.5, "y_ratio": 0.79}
+    gp_coords_username = {"x_ratio": 0.5, "y_ratio": 0.68}
+    gp_coords_password = {"x_ratio": 0.5, "y_ratio": 0.79}
     def focus_window(self, title_keyword, exact=False): pass
     def get_window_rect(self, title_keyword): pass
     def take_screenshot(self, rect, path): pass
@@ -39,9 +39,9 @@ class OSAdapter:
     def get_gp_log_path(self): pass
 
 class LinuxAdapter(OSAdapter):
-    gp_coords_portal = {"x": 150, "y": 326}
-    gp_coords_username = {"x": 150, "y": 125}
-    gp_coords_password = {"x": 150, "y": 175}
+    gp_coords_portal = {"x_ratio": 0.5, "y_ratio": 0.931}
+    gp_coords_username = {"x_ratio": 0.5, "y_ratio": 0.357}
+    gp_coords_password = {"x_ratio": 0.5, "y_ratio": 0.50}
     def focus_window(self, title_keyword, exact=False):
         try:
             if exact:
@@ -105,9 +105,9 @@ class LinuxAdapter(OSAdapter):
         return os.path.expanduser("~/.GlobalProtect/PanGPUI.log")
 
 class WindowsAdapter(OSAdapter):
-    gp_coords_portal = {"x": 150, "y": 277}
-    gp_coords_username = {"x": 150, "y": 238}
-    gp_coords_password = {"x": 150, "y": 277}
+    gp_coords_portal = {"x_ratio": 0.5, "y_ratio": 0.79}
+    gp_coords_username = {"x_ratio": 0.5, "y_ratio": 0.68}
+    gp_coords_password = {"x_ratio": 0.5, "y_ratio": 0.79}
     def focus_window(self, title_keyword, exact=False):
         try:
             import pygetwindow as gw
@@ -373,6 +373,12 @@ class AutomationWorker(QThread):
         if img is None:
             return []
             
+        W, H = rect['w'], rect['h']
+        min_w = int(0.4 * W)
+        max_w = int(0.96 * W)
+        min_h = int(0.04 * H)
+        max_h = int(0.15 * H)
+            
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         edged = cv2.Canny(blurred, 50, 150)
@@ -382,7 +388,7 @@ class AutomationWorker(QThread):
         for c in contours:
             x, y, w, h = cv2.boundingRect(c)
             # GlobalProtect input field dimensions
-            if 120 <= w <= 290 and 15 <= h <= 45:
+            if min_w <= w <= max_w and min_h <= h <= max_h:
                 crop = gray[y:y+h, x:x+w]
                 mean_val = np.mean(crop)
                 # Filter out solid buttons
@@ -494,9 +500,9 @@ class AutomationWorker(QThread):
                         click_y = rect['y'] + fy + fh // 2
                         self.log(f"Nhấp vào ô Portal theo OpenCV: ({click_x}, {click_y})")
                     else:
-                        click_x = rect['x'] + self.os_tool.gp_coords_portal["x"]
-                        click_y = rect['y'] + self.os_tool.gp_coords_portal["y"]
-                        self.log(f"Nhấp vào ô Portal theo tọa độ mặc định: ({click_x}, {click_y})")
+                        click_x = rect['x'] + int(rect['w'] * self.os_tool.gp_coords_portal["x_ratio"])
+                        click_y = rect['y'] + int(rect['h'] * self.os_tool.gp_coords_portal["y_ratio"])
+                        self.log(f"Nhấp vào ô Portal theo tỷ lệ mặc định: ({click_x}, {click_y})")
                     
                     pyautogui.click(click_x, click_y)
                     time.sleep(0.1)
@@ -525,11 +531,11 @@ class AutomationWorker(QThread):
                         click_y1 = rect['y'] + fy1 + fh1 // 2
                         self.log(f"Nhấp vào ô Username/Password theo OpenCV: ({click_x0}, {click_y0}) / ({click_x1}, {click_y1})")
                     else:
-                        click_x0 = rect['x'] + self.os_tool.gp_coords_username["x"]
-                        click_y0 = rect['y'] + self.os_tool.gp_coords_username["y"]
-                        click_x1 = rect['x'] + self.os_tool.gp_coords_password["x"]
-                        click_y1 = rect['y'] + self.os_tool.gp_coords_password["y"]
-                        self.log(f"Nhấp vào ô Username/Password theo tọa độ mặc định: ({click_x0}, {click_y0}) / ({click_x1}, {click_y1})")
+                        click_x0 = rect['x'] + int(rect['w'] * self.os_tool.gp_coords_username["x_ratio"])
+                        click_y0 = rect['y'] + int(rect['h'] * self.os_tool.gp_coords_username["y_ratio"])
+                        click_x1 = rect['x'] + int(rect['w'] * self.os_tool.gp_coords_password["x_ratio"])
+                        click_y1 = rect['y'] + int(rect['h'] * self.os_tool.gp_coords_password["y_ratio"])
+                        self.log(f"Nhấp vào ô Username/Password theo tỷ lệ mặc định: ({click_x0}, {click_y0}) / ({click_x1}, {click_y1})")
                     
                     pyautogui.click(click_x0, click_y0)
                     time.sleep(0.1)
