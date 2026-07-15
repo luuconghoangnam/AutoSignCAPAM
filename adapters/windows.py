@@ -8,6 +8,7 @@ Tính năng nâng cấp:
 import os
 import subprocess
 import time
+from contextlib import contextmanager
 
 from adapters.base import OSAdapter
 
@@ -59,13 +60,22 @@ def _force_foreground(hwnd) -> bool:
         # Attach thread input để vượt qua Windows focus-stealing prevention
         foreground_thread = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)
         target_thread = user32.GetWindowThreadProcessId(hwnd, None)
-        if foreground_thread != target_thread:
+        attached = foreground_thread != target_thread
+        if attached:
             user32.AttachThreadInput(foreground_thread, target_thread, True)
-        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-        user32.SetForegroundWindow(hwnd)
-        if foreground_thread != target_thread:
-            user32.AttachThreadInput(foreground_thread, target_thread, False)
-        return True
+        try:
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+            deadline = time.monotonic() + 0.3
+            while time.monotonic() < deadline:
+                if user32.GetForegroundWindow() == hwnd:
+                    return True
+                time.sleep(0.02)
+            return user32.GetForegroundWindow() == hwnd
+        finally:
+            if attached:
+                user32.AttachThreadInput(foreground_thread, target_thread, False)
     except Exception:
         return False
 
@@ -77,6 +87,11 @@ def _get_clean_env() -> dict:
     # 1. Xóa các biến môi trường liên quan đến Java hệ thống để buộc launcher dùng JRE đi kèm
     for var in ["JAVA_HOME", "CLASSPATH", "JAVA_EXE", "JVM_PATH"]:
         env.pop(var, None)
+
+    # Tiến trình ngoài không được kế thừa metadata bootloader one-file.
+    for var in list(env):
+        if var.startswith("_PYI_") or var == "PYINSTALLER_RESET_ENVIRONMENT":
+            env.pop(var, None)
         
     # 2. Loại bỏ thư mục tạm _MEIPASS của PyInstaller và các đường dẫn JDK/JRE khỏi PATH
     path_val = env.get("PATH", "")
@@ -102,70 +117,159 @@ def _get_clean_env() -> dict:
     return env
 
 
+@contextmanager
+def _external_process_context():
+    """Tách DLL search path của tiến trình ngoài khỏi thư mục PyInstaller _MEI."""
+    import ctypes
+    import sys
+
+    kernel32 = ctypes.windll.kernel32
+    frozen_dir = getattr(sys, "_MEIPASS", None)
+    kernel32.SetDllDirectoryW(None)
+    try:
+        yield
+    finally:
+        if frozen_dir:
+            kernel32.SetDllDirectoryW(frozen_dir)
+
+
+def _launch_external(command: list[str], env: dict, cwd: str | None = None) -> None:
+    with _external_process_context():
+        subprocess.Popen(
+            command,
+            env=env,
+            cwd=cwd,
+            close_fds=True,
+            creationflags=0x00000200,  # CREATE_NEW_PROCESS_GROUP
+        )
+
+
 class WindowsAdapter(OSAdapter):
+
+    @staticmethod
+    def _find_window(title_keyword: str, exact: bool = False):
+        import ctypes
+        import pygetwindow as gw
+
+        windows = gw.getWindowsWithTitle(title_keyword)
+        if exact or title_keyword == "GlobalProtect":
+            windows = [window for window in windows if window.title == title_keyword]
+        windows = [
+            window for window in windows
+            if not window.isMinimized and window.width > 0 and window.height > 0
+        ]
+        if not windows:
+            return None
+
+        foreground = ctypes.windll.user32.GetForegroundWindow()
+        foreground_window = next(
+            (window for window in windows if getattr(window, "_hWnd", None) == foreground),
+            None,
+        )
+        if foreground_window:
+            return foreground_window
+
+        # Popup xác thực CAPAM có cùng exact title với cửa sổ đăng nhập cũ,
+        # nhưng là dialog nhỏ hơn. Ưu tiên dialog nhỏ để tránh chụp nhầm.
+        if exact and title_keyword == "Symantec Privileged Access Manager":
+            return min(windows, key=lambda window: window.width * window.height)
+        return windows[0]
 
     def focus_window(self, title_keyword: str, exact: bool = False) -> bool:
         try:
-            import pygetwindow as gw
-            windows = gw.getWindowsWithTitle(title_keyword)
-            if not windows:
+            import ctypes
+            win = self._find_window(title_keyword, exact)
+            if not win:
                 return False
-            # Ưu tiên khớp chính xác để tránh nhầm với tab trình duyệt
-            if exact or title_keyword == "GlobalProtect":
-                exact_wins = [w for w in windows if w.title == title_keyword]
-                win = exact_wins[0] if exact_wins else windows[0]
-            else:
-                win = windows[0]
-            # Thử Win32 API force focus trước
-            try:
-                import ctypes
-                hwnd = ctypes.windll.user32.FindWindowW(None, win.title)
-                if hwnd:
-                    _force_foreground(hwnd)
-                    time.sleep(0.3)
+            hwnd = getattr(win, "_hWnd", None)
+            if hwnd and ctypes.windll.user32.GetForegroundWindow() == hwnd:
+                return True
+            for _ in range(3):
+                if hwnd and _force_foreground(hwnd):
                     return True
-            except Exception:
-                pass
+                time.sleep(0.05)
             # Fallback: pygetwindow activate
             if win.isMinimized:
                 win.restore()
             win.activate()
-            time.sleep(0.5)
-            return True
+            deadline = time.monotonic() + 0.3
+            while time.monotonic() < deadline:
+                if not hwnd or ctypes.windll.user32.GetForegroundWindow() == hwnd:
+                    return True
+                time.sleep(0.02)
+            return not hwnd or ctypes.windll.user32.GetForegroundWindow() == hwnd
         except Exception:
             return False
 
     def get_window_rect(self, title_keyword: str, exact: bool = False) -> dict | None:
         try:
-            import pygetwindow as gw
-            windows = gw.getWindowsWithTitle(title_keyword)
-            if not windows:
+            win = self._find_window(title_keyword, exact)
+            if not win:
                 return None
-            if exact or title_keyword == "GlobalProtect":
-                exact_wins = [w for w in windows if w.title == title_keyword]
-                if not exact_wins:
-                    return None
-                win = exact_wins[0]
-            else:
-                win = windows[0]
             return {
                 "x": win.left,
                 "y": win.top,
                 "w": win.width,
                 "h": win.height,
-                "id": "win_id",
+                "id": getattr(win, "_hWnd", None),
             }
         except Exception:
             return None
 
+    def kill_window_process(self, rect: dict) -> bool:
+        hwnd = rect.get("id")
+        if not hwnd:
+            return False
+        try:
+            import ctypes
+            pid = ctypes.c_ulong()
+            ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if not pid.value:
+                return False
+            subprocess.run(
+                ["taskkill", "/F", "/PID", str(pid.value)],
+                check=False,
+                creationflags=0x08000000,
+            )
+            return True
+        except Exception:
+            return False
+
     def take_screenshot(self, rect: dict, path: str) -> None:
-        from PIL import ImageGrab
-        bbox = (rect["x"], rect["y"], rect["x"] + rect["w"], rect["y"] + rect["h"])
-        ImageGrab.grab(bbox=bbox).save(path)
+        from PIL import Image, ImageGrab
+        hwnd = rect.get("id")
+        image = None
+        if hwnd:
+            try:
+                # Chụp trực tiếp HWND, không phụ thuộc cửa sổ có đang foreground
+                # hay bị cửa sổ khác che. Alt+Tab trước đây vô tình sửa đúng vấn
+                # đề này bằng cách đưa CAPAM lên trên cùng.
+                image = ImageGrab.grab(window=hwnd, include_layered_windows=True)
+            except Exception:
+                image = None
+        if image is None:
+            bbox = (rect["x"], rect["y"], rect["x"] + rect["w"], rect["y"] + rect["h"])
+            image = ImageGrab.grab(bbox=bbox)
+        if image.size != (rect["w"], rect["h"]):
+            # PyInstaller/PyQt có thể khởi tạo DPI context trước config.py, làm
+            # ImageGrab trả physical pixel còn pygetwindow trả logical pixel.
+            image = image.resize((rect["w"], rect["h"]), Image.Resampling.LANCZOS)
+        image.save(path)
 
     def take_full_screenshot(self, path: str) -> None:
         from PIL import ImageGrab
         ImageGrab.grab().save(path)
+
+    def refresh_window(self, rect: dict) -> None:
+        hwnd = rect.get("id")
+        if not hwnd:
+            return
+        try:
+            import ctypes
+            # RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN
+            ctypes.windll.user32.RedrawWindow(hwnd, None, None, 0x0181)
+        except Exception:
+            pass
 
     def kill_capam(self) -> None:
         creationflags = 0x08000000  # CREATE_NO_WINDOW
@@ -194,13 +298,13 @@ class WindowsAdapter(OSAdapter):
         if exe:
             try:
                 # Đặt cwd là thư mục chứa exe để Java tìm đúng các file cấu hình và DLL đi kèm của nó
-                subprocess.Popen([exe], env=env, cwd=os.path.dirname(exe))
+                _launch_external([exe], env=env, cwd=os.path.dirname(exe))
                 return True
             except Exception:
                 pass
         # Thử trực tiếp từ PATH
         try:
-            subprocess.Popen(["CAPAMClient.exe"], env=env)
+            _launch_external(["CAPAMClient.exe"], env=env)
             return True
         except Exception:
             return False
@@ -210,12 +314,12 @@ class WindowsAdapter(OSAdapter):
         for gp_path in GP_EXE_PATHS:
             if os.path.exists(gp_path):
                 try:
-                    subprocess.Popen([gp_path], env=env, cwd=os.path.dirname(gp_path))
+                    _launch_external([gp_path], env=env, cwd=os.path.dirname(gp_path))
                     return True
                 except Exception:
                     pass
         try:
-            subprocess.Popen(["PanGPA.exe"], env=env)
+            _launch_external(["PanGPA.exe"], env=env)
             return True
         except Exception:
             return False

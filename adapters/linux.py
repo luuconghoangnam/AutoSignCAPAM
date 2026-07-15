@@ -21,11 +21,13 @@ class LinuxAdapter(OSAdapter):
         except Exception:
             return False
 
-    def get_window_rect(self, title_keyword: str) -> dict | None:
+    def get_window_rect(self, title_keyword: str, exact: bool = False) -> dict | None:
         try:
             out = subprocess.check_output(["wmctrl", "-l", "-G"]).decode("utf-8")
             for line in out.splitlines():
-                if title_keyword.lower() in line.lower():
+                title = " ".join(line.split()[7:])
+                matches = title == title_keyword if exact else title_keyword.lower() in title.lower()
+                if matches:
                     parts = line.split()
                     if len(parts) >= 6:
                         return {
