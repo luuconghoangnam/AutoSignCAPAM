@@ -257,6 +257,9 @@ class RDPHandler:
             # Username
             pyautogui.click(rect["x"] + x0 + w0 // 2, rect["y"] + y0 + h0 // 2)
             time.sleep(0.15)
+            if not self.adapter.is_foreground(rect):
+                self._log("Foreground đổi sau click Username Windows Security; dừng nhập.")
+                return False
             pyautogui.hotkey("ctrl", "a")
             time.sleep(0.1)
             write_text_safely(username)
@@ -264,14 +267,22 @@ class RDPHandler:
 
             # Password
             time.sleep(0.2)
+            if not self.adapter.is_foreground(rect):
+                return False
             pyautogui.press("tab")
             time.sleep(0.15)
+            if not self.adapter.is_foreground(rect):
+                self._log("Foreground đổi sau Tab Windows Security; dừng nhập Password.")
+                return False
             pyautogui.hotkey("ctrl", "a")
             time.sleep(0.1)
             write_text_safely(password)
             self._log("Đã nhập Password Windows Security.")
 
             time.sleep(0.3)
+            if not self.adapter.is_foreground(rect):
+                self._log("Foreground đổi; không gửi Enter Windows Security.")
+                return False
             pyautogui.press("enter")
             self._log("Đã nhấn Login Windows Security — kết nối RDP đang thiết lập!")
             return True

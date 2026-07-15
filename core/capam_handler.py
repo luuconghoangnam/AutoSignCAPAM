@@ -221,7 +221,7 @@ class CAPAMHandler:
             if attempt > 0:
                 self._log(f"[Address] Thử lại nhập IP lần {attempt + 1}...")
 
-            if not self.adapter.focus_window(CAPAM_WINDOW_TITLE):
+            if not self.adapter.focus_rect(rect):
                 self._log("[Address] Không thể đưa CAPAM lên foreground trước khi nhập.")
                 time.sleep(0.5)
                 continue
@@ -240,6 +240,9 @@ class CAPAMHandler:
             self._log(f"[Address] Điền IP '{self.capam_ip}' vào ô tại ({click_x}, {click_y}).")
             pyautogui.click(click_x, click_y)
             time.sleep(0.05)
+            if not self.adapter.is_foreground(rect):
+                self._log("[Address] Foreground đổi sau click; dừng nhập IP.")
+                return False
             pyautogui.hotkey("ctrl", "a")
             time.sleep(0.05)
             pyautogui.press("backspace")
@@ -251,6 +254,9 @@ class CAPAMHandler:
             # tránh nhầm nút Cancel khi layout CAPAM thay đổi.
             pyautogui.click(click_x, click_y)
             time.sleep(0.05)
+            if not self.adapter.is_foreground(rect):
+                self._log("[Address] Foreground đổi; không nhấn Enter.")
+                return False
             pyautogui.press("enter")
             self._log(
                 f"Đã xóa và nhập lại IP '{self.capam_ip}', nhấn Enter trong ô Address. "
@@ -330,7 +336,7 @@ class CAPAMHandler:
             if attempt > 0:
                 self._log(f"[Login] Thử lại đăng nhập CAPAM lần {attempt + 1}...")
 
-            if not self.adapter.focus_window(CAPAM_WINDOW_TITLE):
+            if not self.adapter.focus_rect(rect):
                 self._log("[Login] Không thể đưa CAPAM lên foreground trước khi nhập.")
                 time.sleep(0.5)
                 continue
@@ -350,6 +356,9 @@ class CAPAMHandler:
             # Username
             pyautogui.click(click_x0, click_y0)
             time.sleep(0.1)
+            if not self.adapter.is_foreground(rect):
+                self._log("[Login] Foreground đổi sau click Username; dừng nhập.")
+                return False
             pyautogui.hotkey("ctrl", "a")
             time.sleep(0.1)
             pyautogui.press("backspace")
@@ -359,8 +368,13 @@ class CAPAMHandler:
 
             # Password (sử dụng phím TAB để chuyển ô, tránh lỗi OpenCV không nhận diện được ô có chứa sẵn dấu chấm đen)
             time.sleep(0.2)
+            if not self.adapter.is_foreground(rect):
+                return False
             pyautogui.press("tab")
             time.sleep(0.1)
+            if not self.adapter.is_foreground(rect):
+                self._log("[Login] Foreground đổi sau Tab; dừng nhập Password.")
+                return False
             pyautogui.hotkey("ctrl", "a")
             time.sleep(0.1)
             pyautogui.press("backspace")
@@ -369,6 +383,9 @@ class CAPAMHandler:
             self._log("[Login] Đã nhập mật khẩu CAPAM.")
 
             time.sleep(0.3)
+            if not self.adapter.is_foreground(rect):
+                self._log("[Login] Foreground đổi; không gửi Enter.")
+                return False
             pyautogui.press("enter")
             self._log("[Login] Đã gửi thông tin đăng nhập CAPAM.")
             return True
