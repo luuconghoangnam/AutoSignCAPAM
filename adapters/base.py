@@ -19,7 +19,7 @@ class OSAdapter:
         """
         return False
 
-    def get_window_rect(self, title_keyword: str) -> dict | None:
+    def get_window_rect(self, title_keyword: str, exact: bool = False) -> dict | None:
         """Lấy vị trí và kích thước của cửa sổ.
 
         Returns:

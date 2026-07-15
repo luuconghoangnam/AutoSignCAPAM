@@ -103,15 +103,17 @@ class WindowsAdapter(OSAdapter):
         except Exception:
             return False
 
-    def get_window_rect(self, title_keyword: str) -> dict | None:
+    def get_window_rect(self, title_keyword: str, exact: bool = False) -> dict | None:
         try:
             import pygetwindow as gw
             windows = gw.getWindowsWithTitle(title_keyword)
             if not windows:
                 return None
-            if title_keyword == "GlobalProtect":
+            if exact or title_keyword == "GlobalProtect":
                 exact_wins = [w for w in windows if w.title == title_keyword]
-                win = exact_wins[0] if exact_wins else windows[0]
+                if not exact_wins:
+                    return None
+                win = exact_wins[0]
             else:
                 win = windows[0]
             return {

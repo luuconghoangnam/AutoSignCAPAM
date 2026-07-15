@@ -13,7 +13,7 @@ from vision.field_detector import detect_input_fields
 from config import write_text_safely
 
 
-WIN_SEC_TITLE = "Windows Security"
+WIN_SEC_TITLE = "Symantec Privileged Access Manager"
 
 
 class RDPHandler:
@@ -77,36 +77,40 @@ class RDPHandler:
         screenshot_tmp = os.path.join(os.environ.get("TEMP", "/tmp"), "win_sec_crop.tmp.png")
 
         for attempt in range(20):
-            rect = self.adapter.get_window_rect(WIN_SEC_TITLE)
+            rect = self.adapter.get_window_rect(WIN_SEC_TITLE, exact=True)
             if rect:
-                self._log(f"Đã phát hiện bảng Windows Security sau {attempt} giây.")
+                self._log(f"Đã phát hiện bảng xác thực RDP CAPAM sau {attempt} giây.")
                 break
             time.sleep(1)
 
         if not rect:
-            self._log("Không tìm thấy bảng Windows Security trong 20 giây.")
+            self._log("Không tìm thấy bảng xác thực RDP CAPAM trong 20 giây.")
             return False
 
         time.sleep(0.5)
-        self.adapter.focus_window(WIN_SEC_TITLE)
+        self.adapter.focus_window(WIN_SEC_TITLE, exact=True)
         time.sleep(0.5)
 
-        # Phát hiện ô nhập liệu trong Windows Security
+        # Phát hiện ô nhập liệu trong bảng xác thực RDP CAPAM
         fields = []
         for attempt in range(10):
             try:
+                self.adapter.focus_window(WIN_SEC_TITLE, exact=True)
                 self.adapter.take_screenshot(rect, screenshot_tmp)
             except Exception:
                 pass
-            fields = detect_input_fields(screenshot_tmp, profile="windows_security")
+            
+            fields = detect_input_fields(screenshot_tmp, profile="capam")
             try:
                 os.remove(screenshot_tmp)
             except Exception:
                 pass
             if len(fields) >= 2:
                 break
-            self._log(f"Đang chờ ô nhập liệu Windows Security... ({attempt + 1}/10)")
+            self._log(f"Đang chờ ô nhập liệu của bảng xác thực RDP CAPAM... (Lần {attempt+1}/10)")
             time.sleep(0.5)
+            
+        self._log(f"Bảng xác thực RDP CAPAM: Phát hiện thấy {len(fields)} ô nhập liệu.")
 
         if len(fields) < 2:
             self._log("Không đủ ô nhập liệu trong bảng Windows Security.")

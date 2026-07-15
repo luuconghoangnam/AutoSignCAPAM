@@ -25,7 +25,7 @@ _PROFILES = {
         "max_w": (320, 280),
         "min_h": (10, 12),
         "max_h": (50, 40),
-        "min_mean": (0, 0),    # không lọc theo độ sáng
+        "min_mean": (180, 180),    # Lọc nút bấm xanh/xám tối
     },
     "windows_security": {
         "min_w": (60, 80),
