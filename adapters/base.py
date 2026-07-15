@@ -35,9 +35,17 @@ class OSAdapter:
         """Chụp toàn màn hình và lưu ra file."""
         pass
 
+    def refresh_window(self, rect: dict) -> None:
+        """Yêu cầu cửa sổ vẽ lại nội dung trước khi chụp."""
+        pass
+
     def kill_capam(self) -> None:
         """Tắt tiến trình CAPAM Client."""
         pass
+
+    def kill_window_process(self, rect: dict) -> bool:
+        """Tắt process sở hữu HWND trong rect."""
+        return False
 
     def launch_capam(self) -> bool:
         """Khởi động CAPAM Client. Returns True nếu thành công."""

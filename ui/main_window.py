@@ -13,8 +13,8 @@ from PyQt5.QtWidgets import (
     QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QRadioButton, QButtonGroup, QTextEdit, QCheckBox,
 )
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
+from PyQt5.QtCore import Qt, QRegularExpression, QTimer
+from PyQt5.QtGui import QFont, QRegularExpressionValidator
 
 from config import CAPAM_IP_DEFAULT
 from core.state_machine import AutomationWorker
@@ -58,6 +58,7 @@ class MainWindow(QMainWindow):
         self.worker: AutomationWorker | None = None
         self._init_ui()
         self._load_settings()
+        QTimer.singleShot(0, self.txt_otp.setFocus)
 
     # ------------------------------------------------------------------
     # UI Initialization
@@ -117,6 +118,9 @@ class MainWindow(QMainWindow):
         self.txt_otp = QLineEdit()
         self.txt_otp.setObjectName("otp_input")
         self.txt_otp.setMaxLength(6)
+        self.txt_otp.setValidator(
+            QRegularExpressionValidator(QRegularExpression(r"\d{0,6}"), self.txt_otp)
+        )
         self.txt_otp.setAlignment(Qt.AlignCenter)
         self.txt_otp.setPlaceholderText("______")
         self.txt_otp.returnPressed.connect(self.start_automation)
