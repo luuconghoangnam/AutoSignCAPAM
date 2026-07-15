@@ -8,6 +8,8 @@ import os
 import re
 import time
 import socket
+import tempfile
+import uuid
 
 import pyautogui
 
@@ -32,7 +34,9 @@ class GPHandler:
         self.adapter = adapter
         self._log = log_fn or (lambda msg: None)
         self._log_offset: int = 0
-        self._screenshot_tmp = os.path.join(os.environ.get("TEMP", "/tmp"), "gp_crop.tmp.png")
+        self._screenshot_tmp = os.path.join(
+            tempfile.gettempdir(), f"gp_crop_{os.getpid()}_{uuid.uuid4().hex}.png"
+        )
         self._debug_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "debug_gp_fields.png")
 
     # ------------------------------------------------------------------
@@ -42,8 +46,8 @@ class GPHandler:
     def is_already_connected(self, capam_ip: str, port: int = 443, timeout: int = 2) -> bool:
         """Kiểm tra nhanh xem VPN đã kết nối sẵn chưa."""
         try:
-            socket.setdefaulttimeout(timeout)
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(min(timeout, 0.5))
                 s.connect((capam_ip, port))
             return True
         except Exception:
@@ -53,14 +57,19 @@ class GPHandler:
         """Đảm bảo cửa sổ GP đang hiển thị. Tự khởi động lại nếu bị ẩn.
         Returns: rect dict hoặc None nếu vẫn không tìm được sau 2 lần thử.
         """
-        rect = self.adapter.get_window_rect("GlobalProtect")
-        if rect:
-            return rect
-        self._log("Cửa sổ GlobalProtect không hiển thị, đang kích hoạt lại...")
-        self.adapter.launch_gp_ui()
-        time.sleep(1.5)
-        self.adapter.focus_window("GlobalProtect", exact=True)
-        return self.adapter.get_window_rect("GlobalProtect")
+        rect = self.adapter.get_window_rect("GlobalProtect", exact=True)
+        if not rect:
+            self._log("Cửa sổ GlobalProtect không hiển thị, đang kích hoạt lại...")
+            self.adapter.launch_gp_ui()
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                rect = self.adapter.get_window_rect("GlobalProtect", exact=True)
+                if rect:
+                    break
+                time.sleep(0.5)
+        if not rect:
+            return None
+        return rect
 
     def init_log_offset(self) -> None:
         """Ghi nhận kích thước file log hiện tại làm điểm mốc để chỉ đọc log mới."""
@@ -123,6 +132,10 @@ class GPHandler:
 
     def detect_fields(self, rect: dict) -> list:
         """Chụp cửa sổ GP và phát hiện các ô nhập liệu bằng OpenCV."""
+        current_rect = self.adapter.get_window_rect("GlobalProtect", exact=True)
+        if not current_rect:
+            return []
+        rect = current_rect
         try:
             self.adapter.take_screenshot(rect, self._screenshot_tmp)
         except Exception:
@@ -130,7 +143,7 @@ class GPHandler:
         fields = detect_input_fields(
             self._screenshot_tmp,
             profile="gp",
-            debug_output_path=self._debug_path,
+            debug_output_path=None,
         )
         try:
             os.remove(self._screenshot_tmp)
@@ -138,8 +151,18 @@ class GPHandler:
             pass
         return fields
 
-    def enter_portal_url(self, rect: dict, fields: list) -> None:
+    def enter_portal_url(self, rect: dict, fields: list) -> bool:
         """Điền URL portal vào ô nhập và nhấn Connect."""
+        if not self.adapter.focus_window("GlobalProtect", exact=True):
+            self._log("[Portal] Không thể đưa GlobalProtect lên foreground.")
+            return False
+        current_rect = self.adapter.get_window_rect("GlobalProtect", exact=True)
+        if not current_rect or any(
+            rect.get(key) != current_rect.get(key) for key in ("id", "w", "h")
+        ):
+            self._log("[Portal] Cửa sổ GlobalProtect đã thay đổi; bỏ tọa độ cũ.")
+            return False
+        rect = current_rect
         if fields:
             x0, y0, w0, h0 = fields[0]
             click_x = rect["x"] + x0 + w0 // 2
@@ -160,9 +183,20 @@ class GPHandler:
         time.sleep(0.1)
         pyautogui.press("enter")
         self._log(f"Đã nhập portal '{GP_PORTAL_URL}', chờ chuyển trang đăng nhập...")
+        return True
 
-    def enter_credentials(self, rect: dict, fields: list, username: str, password: str) -> None:
+    def enter_credentials(self, rect: dict, fields: list, username: str, password: str) -> bool:
         """Điền tài khoản và mật khẩu vào màn hình đăng nhập GP."""
+        if not self.adapter.focus_window("GlobalProtect", exact=True):
+            self._log("[Credentials] Không thể đưa GlobalProtect lên foreground.")
+            return False
+        current_rect = self.adapter.get_window_rect("GlobalProtect", exact=True)
+        if not current_rect or any(
+            rect.get(key) != current_rect.get(key) for key in ("id", "w", "h")
+        ):
+            self._log("[Credentials] Cửa sổ GlobalProtect đã thay đổi; bỏ tọa độ cũ.")
+            return False
+        rect = current_rect
         if len(fields) >= 2:
             x0, y0, w0, h0 = fields[0]
             click_x0 = rect["x"] + x0 + w0 // 2
@@ -197,6 +231,7 @@ class GPHandler:
         time.sleep(0.1)
         write_text_safely(password)
         time.sleep(0.1)
+        return True
 
 
     def wait_connected_or_fail(self, capam_ip: str, port: int = 443, timeout_sec: int = 25) -> str:
@@ -206,12 +241,13 @@ class GPHandler:
         Returns:
             'CONNECTED' | 'AUTH_FAILED' | 'TIMEOUT'
         """
-        steps = timeout_sec * 2
-        for _ in range(steps):
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() < deadline:
+            poll_started = time.monotonic()
             # Kiểm tra kết nối mạng
             try:
-                socket.setdefaulttimeout(0.5)
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.2)
                     s.connect((capam_ip, port))
                 return "CONNECTED"
             except Exception:
@@ -220,5 +256,7 @@ class GPHandler:
             state = self.read_state(read_all=False)
             if state == STATE_AUTH_FAILED:
                 return "AUTH_FAILED"
-            time.sleep(0.5)
+            remaining = min(deadline, poll_started + 0.5) - time.monotonic()
+            if remaining > 0:
+                time.sleep(remaining)
         return "TIMEOUT"
