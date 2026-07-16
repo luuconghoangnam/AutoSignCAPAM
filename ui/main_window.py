@@ -124,7 +124,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _init_ui(self) -> None:
-        self.setWindowTitle("CAPAM Auto-Sign In Tool")
+        self.setWindowTitle("CAPAM AutoSign")
         self.setFixedSize(480, 560)
         self.setStyleSheet(_STYLESHEET)
 

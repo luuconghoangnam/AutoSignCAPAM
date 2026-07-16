@@ -3,7 +3,7 @@ setlocal
 cd /d "%~dp0"
 
 set "VENV_PYTHON=%CD%\.venv\Scripts\python.exe"
-set "APP_NAME=CAPAM_AutoSign_Windows"
+set "APP_NAME=CAPAM AutoSign"
 
 echo [1/5] Kiem tra Python 3...
 if not exist "%VENV_PYTHON%" (
