@@ -101,6 +101,9 @@ class LinuxAdapter(OSAdapter):
             check=True,
         )
 
+    def capture_window(self, rect: dict):
+        return None
+
     def take_full_screenshot(self, path: str) -> None:
         display = os.environ.get("DISPLAY", ":0")
         subprocess.run(["maim", path], env={"DISPLAY": display}, check=True)

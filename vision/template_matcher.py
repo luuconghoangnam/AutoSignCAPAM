@@ -89,7 +89,8 @@ def find_device_rdp_button(
     scene: np.ndarray,
     device_choice: str,
     log_fn=None,
-) -> tuple[int, int] | None:
+    return_details: bool = False,
+) -> tuple[int, int] | dict | None:
     """Tìm nút RDP tương ứng với thiết bị được chọn trong ảnh chụp màn hình.
 
     Args:
@@ -175,4 +176,11 @@ def find_device_rdp_button(
     click_x = int(pt[0] + rdp_w / 2)
     click_y = int(pt[1] + rdp_h / 2)
     _log(f"Xác định nút RDP tại ({click_x}, {click_y}) — cách dòng thiết bị {min_dist_y:.1f}px.")
+    if return_details:
+        return {
+            "point": (click_x, click_y),
+            "device_score": float(max_val_dev),
+            "rdp_score": float(best_score),
+            "scale": float(matched_scale),
+        }
     return click_x, click_y

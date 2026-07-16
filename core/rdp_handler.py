@@ -97,6 +97,7 @@ class RDPHandler:
         focused_once = False
         rendered_at = None
         match_misses = 0
+        previous_scene = None
         while time.monotonic() < deadline:
             if self._cancelled():
                 return False
@@ -127,28 +128,40 @@ class RDPHandler:
                 self.adapter.refresh_window(rect)
                 time.sleep(0.25)
                 focused_once = True
-            try:
-                self.adapter.take_screenshot(rect, self._screenshot_tmp)
-            except Exception as e:
-                self._log(f"Lỗi chụp màn hình: {e}")
-                self._wait_next_poll(poll_started, deadline)
-                continue
-
-            scene = cv2.imread(self._screenshot_tmp)
-            try:
-                os.remove(self._screenshot_tmp)
-            except Exception:
-                pass
+            scene = self.adapter.capture_window(rect)
+            if scene is None:
+                try:
+                    self.adapter.take_screenshot(rect, self._screenshot_tmp)
+                    scene = cv2.imread(self._screenshot_tmp)
+                except Exception as e:
+                    self._log(f"Lỗi chụp màn hình: {e}")
+                finally:
+                    try:
+                        os.remove(self._screenshot_tmp)
+                    except Exception:
+                        pass
 
             if scene is None:
                 self._log("Không thể đọc ảnh cửa sổ CAPAM vừa chụp.")
                 self._wait_next_poll(poll_started, deadline)
                 continue
 
-            if scene.std() < 3.0:
+            frame_std = float(scene.std())
+            if frame_std < 3.0:
                 self._log("Ảnh CAPAM chưa render hoặc đang bị che; yêu cầu vẽ lại...")
                 self.adapter.refresh_window(rect)
                 focused_once = False
+                self._wait_next_poll(poll_started, deadline)
+                continue
+
+            frame_delta = (
+                float(cv2.absdiff(scene, previous_scene).mean())
+                if previous_scene is not None and previous_scene.shape == scene.shape
+                else 255.0
+            )
+            previous_scene = scene
+            if frame_delta > 18.0:
+                self._log("CAPAM đang cập nhật danh sách; chờ frame ổn định...")
                 self._wait_next_poll(poll_started, deadline)
                 continue
 
@@ -162,18 +175,30 @@ class RDPHandler:
                 return False
 
             result = find_device_rdp_button(
-                scene, device_choice, log_fn=self._log if verbose else None
+                scene,
+                device_choice,
+                log_fn=self._log if verbose else None,
+                return_details=True,
             )
+            if result and (
+                result["device_score"] < 0.70 or result["rdp_score"] < 0.70
+            ):
+                self._log(
+                    f"Ứng viên chưa đủ tin cậy (device={result['device_score']:.2f}, "
+                    f"rdp={result['rdp_score']:.2f}); chờ frame mới."
+                )
+                result = None
             if result:
+                point = result["point"]
                 match_misses = 0
                 unchanged = (
                     self._same_rect(previous_rect, rect)
                     and previous_result is not None
-                    and abs(previous_result[0] - result[0]) <= 8
-                    and abs(previous_result[1] - result[1]) <= 8
+                    and abs(previous_result[0] - point[0]) <= 8
+                    and abs(previous_result[1] - point[1]) <= 8
                 )
                 stable_count = stable_count + 1 if unchanged else 1
-                previous_result = result
+                previous_result = point
                 previous_rect = rect.copy()
                 if stable_count < 2:
                     self._wait_next_poll(poll_started, deadline)
@@ -193,8 +218,8 @@ class RDPHandler:
                     previous_result = None
                     previous_rect = None
                     continue
-                click_x = rect["x"] + result[0]
-                click_y = rect["y"] + result[1]
+                click_x = rect["x"] + point[0]
+                click_y = rect["y"] + point[1]
                 self._log(f"Đang click nút RDP tại ({click_x}, {click_y})...")
                 if not self.adapter.is_foreground(rect):
                     self._log("Foreground đổi trước click RDP; hủy click.")

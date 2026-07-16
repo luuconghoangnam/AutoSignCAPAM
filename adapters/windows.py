@@ -438,6 +438,21 @@ class WindowsAdapter(OSAdapter):
             image = image.resize((rect["w"], rect["h"]), Image.Resampling.LANCZOS)
         image.save(path)
 
+    def capture_window(self, rect: dict):
+        """Capture HWND directly into BGR memory without PNG disk round-trip."""
+        from PIL import ImageGrab
+        import numpy as np
+        hwnd = rect.get("id")
+        if not hwnd:
+            return None
+        try:
+            image = ImageGrab.grab(window=hwnd, include_layered_windows=True).convert("RGB")
+            if image.size != (rect["w"], rect["h"]):
+                image = image.resize((rect["w"], rect["h"]))
+            return np.asarray(image)[:, :, ::-1].copy()
+        except Exception:
+            return None
+
     def take_full_screenshot(self, path: str) -> None:
         from PIL import ImageGrab
         ImageGrab.grab().save(path)

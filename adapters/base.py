@@ -59,6 +59,10 @@ class OSAdapter:
         """Chụp ảnh vùng màn hình được chỉ định và lưu ra file."""
         pass
 
+    def capture_window(self, rect: dict):
+        """Capture exact window into memory; returns BGR ndarray or None."""
+        return None
+
     def take_full_screenshot(self, path: str) -> None:
         """Chụp toàn màn hình và lưu ra file."""
         pass
