@@ -14,41 +14,100 @@ from PyQt5.QtWidgets import (
     QRadioButton, QButtonGroup, QTextEdit, QCheckBox,
 )
 from PyQt5.QtCore import Qt, QRegularExpression, QTimer
-from PyQt5.QtGui import QFont, QRegularExpressionValidator
+from PyQt5.QtGui import QFont, QRegularExpressionValidator, QIcon
 
-from config import CAPAM_IP_DEFAULT
+from config import CAPAM_IP_DEFAULT, get_resource_path
 from core.state_machine import AutomationWorker
 
 SETTINGS_FILE = os.path.expanduser("~/.capam_autosign_settings.json")
 
-_STYLESHEET = """
-    QMainWindow { background-color: #1e1e2e; }
-    QLabel { color: #cdd6f4; font-size: 12px; font-weight: bold; }
-    QLineEdit {
-        background-color: #313244; color: #89b4fa;
-        border: 2px solid #45475a; border-radius: 6px;
-        padding: 4px 6px; font-size: 13px; font-weight: bold; min-height: 22px;
-    }
-    QLineEdit#otp_input { font-size: 22px; letter-spacing: 5px; min-height: 36px; }
-    QLineEdit:focus { border: 2px solid #89b4fa; }
-    QRadioButton { color: #cdd6f4; font-size: 12px; spacing: 6px; }
-    QRadioButton::indicator { width: 14px; height: 14px; }
-    QPushButton {
+# Absolute paths to indicator images for QSS styling
+_radio_unchecked = get_resource_path("ui/radio_unchecked.png").replace("\\", "/")
+_radio_checked = get_resource_path("ui/radio_checked.png").replace("\\", "/")
+_checkbox_unchecked = get_resource_path("ui/checkbox_unchecked.png").replace("\\", "/")
+_checkbox_checked = get_resource_path("ui/checkbox_checked.png").replace("\\", "/")
+
+_STYLESHEET = f"""
+    QMainWindow {{ background-color: #1e1e2e; }}
+    QLabel {{ color: #a6adc8; font-size: 12px; font-weight: bold; }}
+    QLineEdit {{
+        background-color: #24253a; color: #cdd6f4;
+        border: 2px solid #45475a; border-radius: 8px;
+        padding: 5px 8px; font-size: 13px; font-weight: normal; min-height: 24px;
+    }}
+    QLineEdit#otp_input {{
+        font-size: 26px; font-weight: bold; letter-spacing: 8px; min-height: 42px;
+        border: 2px solid #f38ba8; background-color: #1e1e2e; color: #f38ba8;
+    }}
+    QLineEdit:focus {{ border: 2px solid #89b4fa; background-color: #2b2c45; }}
+    QLineEdit#otp_input:focus {{ border: 2px solid #eba0ac; }}
+    
+    QRadioButton {{ color: #cdd6f4; font-size: 12px; spacing: 8px; }}
+    QRadioButton::indicator {{ width: 18px; height: 18px; }}
+    QRadioButton::indicator::unchecked {{ image: url({_radio_unchecked}); }}
+    QRadioButton::indicator::checked {{ image: url({_radio_checked}); }}
+    
+    QCheckBox {{ color: #cdd6f4; font-size: 12px; spacing: 8px; }}
+    QCheckBox::indicator {{ width: 18px; height: 18px; }}
+    QCheckBox::indicator::unchecked {{ image: url({_checkbox_unchecked}); }}
+    QCheckBox::indicator::checked {{ image: url({_checkbox_checked}); }}
+    
+    QPushButton {{
         background-color: #89b4fa; color: #1e1e2e;
-        font-size: 13px; font-weight: bold; border-radius: 6px; padding: 7px;
-    }
-    QPushButton:hover { background-color: #b4befe; }
-    QPushButton:disabled { background-color: #45475a; color: #a6adc8; }
-    QPushButton#btn_cancel { background-color: #f38ba8; color: #1e1e2e; }
-    QPushButton#btn_cancel:hover { background-color: #eba0ac; }
-    QPushButton#btn_cancel:disabled { background-color: #45475a; color: #a6adc8; }
-    QCheckBox { color: #a6adc8; font-size: 12px; }
-    QTextEdit {
+        font-size: 13px; font-weight: bold; border-radius: 8px; padding: 10px;
+        border: none;
+    }}
+    QPushButton:hover {{ background-color: #b4befe; }}
+    QPushButton:pressed {{ background-color: #74c7ec; }}
+    QPushButton:disabled {{ background-color: #313244; color: #585b70; }}
+    QPushButton#btn_cancel {{ background-color: #f38ba8; color: #1e1e2e; }}
+    QPushButton#btn_cancel:hover {{ background-color: #eba0ac; }}
+    QPushButton#btn_cancel:pressed {{ background-color: #e64553; }}
+    QPushButton#btn_cancel:disabled {{ background-color: #313244; color: #585b70; }}
+    
+    QTextEdit {{
         background-color: #11111b; color: #a6e3a1;
-        border: 1px solid #45475a; border-radius: 4px;
-        font-family: 'Monospace'; font-size: 11px;
-    }
+        border: 2px solid #313244; border-radius: 8px; padding: 8px;
+        font-family: 'Consolas', 'Monospace', 'Courier New'; font-size: 11px;
+    }}
+    
+    QScrollBar:vertical {{
+        border: none;
+        background: #11111b;
+        width: 10px;
+        margin: 0px;
+    }}
+    QScrollBar::handle:vertical {{
+        background: #45475a;
+        min-height: 20px;
+        border-radius: 5px;
+    }}
+    QScrollBar::handle:vertical:hover {{
+        background: #585b70;
+    }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+        border: none; background: none; height: 0px;
+    }}
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+        background: none;
+    }}
 """
+
+
+def apply_dark_title_bar(window: QMainWindow) -> None:
+    import platform
+    if platform.system() == "Windows":
+        try:
+            import ctypes
+            hwnd = int(window.winId())
+            rendering = ctypes.c_int(1)
+            # DWMWA_USE_IMMERSIVE_DARK_MODE: 20 for Windows 11, 19 for Windows 10
+            for attr in (20, 19):
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, attr, ctypes.byref(rendering), ctypes.sizeof(rendering)
+                )
+        except Exception:
+            pass
 
 
 class MainWindow(QMainWindow):
@@ -66,8 +125,16 @@ class MainWindow(QMainWindow):
 
     def _init_ui(self) -> None:
         self.setWindowTitle("CAPAM Auto-Sign In Tool")
-        self.setFixedSize(480, 530)
+        self.setFixedSize(480, 560)
         self.setStyleSheet(_STYLESHEET)
+
+        # Apply dark title bar (Windows 10/11)
+        apply_dark_title_bar(self)
+
+        # Set Window Icon
+        icon_path = get_resource_path("ui/icon.png")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
 
         central = QWidget()
         self.setCentralWidget(central)

@@ -48,6 +48,12 @@ echo [4/5] Dong goi ung dung...
     --add-data "template_rdp.png;." ^
     --add-data "template_200.png;." ^
     --add-data "template_12.png;." ^
+    --add-data "ui/icon.png;ui" ^
+    --add-data "ui/radio_unchecked.png;ui" ^
+    --add-data "ui/radio_checked.png;ui" ^
+    --add-data "ui/checkbox_unchecked.png;ui" ^
+    --add-data "ui/checkbox_checked.png;ui" ^
+    --icon "ui/icon.ico" ^
     --paths "." ^
     --hidden-import "adapters" ^
     --hidden-import "adapters.windows" ^
