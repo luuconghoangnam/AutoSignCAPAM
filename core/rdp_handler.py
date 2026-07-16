@@ -95,6 +95,8 @@ class RDPHandler:
         stable_count = 0
         next_detail_log = started
         focused_once = False
+        rendered_at = None
+        match_misses = 0
         while time.monotonic() < deadline:
             if self._cancelled():
                 return False
@@ -150,10 +152,20 @@ class RDPHandler:
                 self._wait_next_poll(poll_started, deadline)
                 continue
 
+            if rendered_at is None:
+                rendered_at = time.monotonic()
+            elif time.monotonic() - rendered_at >= 12:
+                self._log(
+                    "Màn hình danh sách đã render nhưng không nhận diện được thiết bị "
+                    "sau 12 giây; dừng retry để tránh vòng lặp kéo dài."
+                )
+                return False
+
             result = find_device_rdp_button(
                 scene, device_choice, log_fn=self._log if verbose else None
             )
             if result:
+                match_misses = 0
                 unchanged = (
                     self._same_rect(previous_rect, rect)
                     and previous_result is not None
@@ -190,9 +202,19 @@ class RDPHandler:
                     continue
                 pyautogui.click(click_x, click_y)
                 return True
+            match_misses += 1
             stable_count = 0
             previous_result = None
             previous_rect = None
+            if match_misses % 4 == 0:
+                self._log(
+                    f"Nhận diện trượt {match_misses} frame; kích hoạt lại đúng cửa sổ CAPAM..."
+                )
+                focused_once = False
+                self.adapter.refresh_window(rect)
+            elif match_misses % 2 == 0:
+                self._log(f"Nhận diện trượt {match_misses} frame; yêu cầu CAPAM vẽ lại...")
+                self.adapter.refresh_window(rect)
             self._wait_next_poll(poll_started, deadline)
         return False
 
