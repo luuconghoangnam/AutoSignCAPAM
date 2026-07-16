@@ -146,6 +146,10 @@ class MainWindow(QMainWindow):
         self.chk_auto_exit.setChecked(True)
         layout.addWidget(self.chk_auto_exit)
 
+        self.chk_block_browser = QCheckBox("Chặn trình duyệt chiếm focus sau khi VPN kết nối")
+        self.chk_block_browser.setChecked(True)
+        layout.addWidget(self.chk_block_browser)
+
         # --- Nút bấm ---
         btn_layout = QHBoxLayout()
         self.btn_run = QPushButton("TIẾN HÀNH ĐĂNG NHẬP")
@@ -178,6 +182,7 @@ class MainWindow(QMainWindow):
             self.txt_pass_prefix.setText(data.get("password_prefix", ""))
             self.txt_capam_ip.setText(data.get("capam_ip", CAPAM_IP_DEFAULT))
             self.chk_auto_exit.setChecked(data.get("auto_exit", True))
+            self.chk_block_browser.setChecked(data.get("block_browser", True))
         except Exception:
             pass
 
@@ -188,6 +193,7 @@ class MainWindow(QMainWindow):
                 "password_prefix": self.txt_pass_prefix.text().strip(),
                 "capam_ip": self.txt_capam_ip.text().strip(),
                 "auto_exit": self.chk_auto_exit.isChecked(),
+                "block_browser": self.chk_block_browser.isChecked(),
             }
             with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f)
@@ -197,6 +203,12 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # UI Helpers
     # ------------------------------------------------------------------
+
+    def activate_on_startup(self) -> None:
+        """Bring tool forward once, unless automation already started."""
+        if not self.worker or not self.worker.isRunning():
+            self.raise_()
+            self.activateWindow()
 
     def _toggle_password(self) -> None:
         mode = QLineEdit.Normal if self.chk_show_pass.isChecked() else QLineEdit.Password
@@ -209,7 +221,7 @@ class MainWindow(QMainWindow):
         for w in (
             self.txt_username, self.txt_pass_prefix, self.txt_capam_ip, self.txt_otp,
             self.rb_200, self.rb_12, self.rb_none,
-            self.chk_show_pass, self.chk_auto_exit,
+            self.chk_show_pass, self.chk_auto_exit, self.chk_block_browser,
         ):
             w.setEnabled(enabled)
         self.btn_run.setEnabled(enabled)
@@ -248,7 +260,14 @@ class MainWindow(QMainWindow):
         self.txt_logs.clear()
         self._log("[INFO] Bắt đầu khởi chạy kịch bản tự động hóa...")
 
-        self.worker = AutomationWorker(username, password_prefix, otp, choice, capam_ip)
+        self.worker = AutomationWorker(
+            username,
+            password_prefix,
+            otp,
+            choice,
+            capam_ip,
+            self.chk_block_browser.isChecked(),
+        )
         self.worker.log_signal.connect(self._log)
         self.worker.finished_signal.connect(self._automation_finished)
         self.worker.start()
@@ -256,10 +275,13 @@ class MainWindow(QMainWindow):
     def cancel_automation(self) -> None:
         if self.worker and self.worker.isRunning():
             self._log("[!] Đang dừng kịch bản tự động hóa theo yêu cầu người dùng...")
-            self.worker.terminate()
-            self.worker.wait()
+            self.worker.requestInterruption()
+            if not self.worker.wait(3000):
+                self._log("[!] Đang chờ thao tác hệ thống hiện tại kết thúc an toàn...")
+                return
             self._log("[!] Đã dừng thành công.")
-        self._automation_finished(False)
+        else:
+            self._automation_finished(False)
 
     def _automation_finished(self, success: bool) -> None:
         if success and self.chk_auto_exit.isChecked():

@@ -5,6 +5,7 @@ Chỉ chứa logic khởi tạo tối thiểu: DPI setup, QApplication, MainWind
 Toàn bộ logic tự động hóa nằm trong các module core/, adapters/, vision/, ui/.
 """
 import sys
+from PyQt5.QtCore import QTimer
 # config.py tự setup DPI awareness khi import
 import config  # noqa: F401 — side-effect import
 
@@ -20,6 +21,8 @@ def main() -> None:
 
     window = MainWindow()
     window.show()
+    # Activate once at startup so launching from Explorer cannot leave UI hidden.
+    QTimer.singleShot(500, window.activate_on_startup)
 
     sys.exit(app.exec_())
 

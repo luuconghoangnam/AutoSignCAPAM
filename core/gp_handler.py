@@ -8,6 +8,7 @@ import os
 import re
 import time
 import socket
+import subprocess
 import tempfile
 import uuid
 
@@ -30,9 +31,10 @@ STATE_UNKNOWN = "UNKNOWN"
 class GPHandler:
     """Xử lý toàn bộ luồng đăng nhập GlobalProtect."""
 
-    def __init__(self, adapter: OSAdapter, log_fn=None):
+    def __init__(self, adapter: OSAdapter, log_fn=None, cancel_fn=None):
         self.adapter = adapter
         self._log = log_fn or (lambda msg: None)
+        self._cancelled = cancel_fn or (lambda: False)
         self._log_offset: int = 0
         self._screenshot_tmp = os.path.join(
             tempfile.gettempdir(), f"gp_crop_{os.getpid()}_{uuid.uuid4().hex}.png"
@@ -44,12 +46,35 @@ class GPHandler:
     # ------------------------------------------------------------------
 
     def is_already_connected(self, capam_ip: str, port: int = 443, timeout: int = 2) -> bool:
-        """Kiểm tra nhanh xem VPN đã kết nối sẵn chưa."""
+        """Check GP state first; CAPAM port 443 is only a fallback probe."""
+        if self.read_state(read_all=True) == STATE_CONNECTED:
+            return True
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(min(timeout, 0.5))
                 s.connect((capam_ip, port))
             return True
+        except Exception:
+            return self._ping_host(capam_ip)
+
+    @staticmethod
+    def _ping_host(host: str, timeout_ms: int = 400) -> bool:
+        """ICMP fallback; VPN may route host while CAPAM TCP 443 stays closed."""
+        try:
+            command = (
+                ["ping", "-n", "1", "-w", str(timeout_ms), host]
+                if os.name == "nt"
+                else ["ping", "-c", "1", "-W", "1", host]
+            )
+            result = subprocess.run(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=max(1.0, timeout_ms / 1000 + 0.5),
+                check=False,
+                creationflags=0x08000000 if os.name == "nt" else 0,
+            )
+            return result.returncode == 0
         except Exception:
             return False
 
@@ -63,6 +88,8 @@ class GPHandler:
             self.adapter.launch_gp_ui()
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline:
+                if self._cancelled():
+                    return None
                 rect = self.adapter.get_window_rect("GlobalProtect", exact=True)
                 if rect:
                     break
@@ -108,23 +135,26 @@ class GPHandler:
                     f.seek(start)
                 content = f.read()
 
-            matches = list(re.finditer(r"<response>.*?</response>", content, re.DOTALL))
+            matches = list(re.finditer(r"<response(?:\s[^>]*)?>.*?</response>", content, re.DOTALL))
             if not matches:
                 return STATE_UNKNOWN
-            last_msg = matches[-1].group(0)
 
-            # Kiểm tra lỗi xác thực ngay lập tức (chỉ áp dụng khi đọc log mới)
-            if not read_all:
-                if "User authentication failed" in last_msg or "Authentication Failed" in last_msg:
+            # Ignore trailing keep-alive responses such as <disabled>no</disabled>.
+            for match in reversed(matches):
+                message = match.group(0)
+                if not read_all and (
+                    "User authentication failed" in message
+                    or "Authentication Failed" in message
+                ):
                     return STATE_AUTH_FAILED
-
-
-            if "<type>user_credential</type>" in last_msg:
-                return STATE_CREDENTIALS
-            elif "<type>status</type>" in last_msg:
-                if "<state>Connected</state>" in last_msg:
-                    return STATE_CONNECTED
-                else:
+                if "<type>user_credential</type>" in message:
+                    return STATE_CREDENTIALS
+                if "<type>status</type>" in message:
+                    if (
+                        "<state>Connected</state>" in message
+                        or "<status>Connected</status>" in message
+                    ):
+                        return STATE_CONNECTED
                     return STATE_PORTAL
         except Exception as e:
             self._log(f"Lỗi đọc log GP: {e}")
@@ -132,7 +162,7 @@ class GPHandler:
 
     def detect_fields(self, rect: dict) -> list:
         """Chụp cửa sổ GP và phát hiện các ô nhập liệu bằng OpenCV."""
-        current_rect = self.adapter.get_window_rect("GlobalProtect", exact=True)
+        current_rect = self.adapter.get_window_rect_for_hwnd(rect.get("id"))
         if not current_rect:
             return []
         rect = current_rect
@@ -156,7 +186,7 @@ class GPHandler:
         if not self.adapter.focus_rect(rect):
             self._log("[Portal] Không thể đưa đúng cửa sổ GlobalProtect lên foreground.")
             return False
-        current_rect = self.adapter.get_window_rect("GlobalProtect", exact=True)
+        current_rect = self.adapter.get_window_rect_for_hwnd(rect.get("id"))
         if not current_rect or any(
             rect.get(key) != current_rect.get(key) for key in ("id", "w", "h")
         ):
@@ -182,7 +212,8 @@ class GPHandler:
         time.sleep(0.1)
         pyautogui.press("backspace")
         time.sleep(0.1)
-        write_text_safely(GP_PORTAL_URL)
+        if not write_text_safely(GP_PORTAL_URL, lambda: self.adapter.is_foreground(rect)):
+            return False
         time.sleep(0.1)
         if not self.adapter.is_foreground(rect):
             self._log("[Portal] Foreground đổi trong lúc nhập; không nhấn Enter.")
@@ -196,7 +227,7 @@ class GPHandler:
         if not self.adapter.focus_rect(rect):
             self._log("[Credentials] Không thể đưa đúng cửa sổ GlobalProtect lên foreground.")
             return False
-        current_rect = self.adapter.get_window_rect("GlobalProtect", exact=True)
+        current_rect = self.adapter.get_window_rect_for_hwnd(rect.get("id"))
         if not current_rect or any(
             rect.get(key) != current_rect.get(key) for key in ("id", "w", "h")
         ):
@@ -222,14 +253,16 @@ class GPHandler:
             return False
         pyautogui.hotkey("ctrl", "a")
         pyautogui.press("backspace")
-        write_text_safely(username)
+        if not write_text_safely(username, lambda: self.adapter.is_foreground(rect)):
+            return False
         pyautogui.click(click_x1, click_y1)
         time.sleep(0.1)
         if not self.adapter.is_foreground(rect):
             return False
         pyautogui.hotkey("ctrl", "a")
         pyautogui.press("backspace")
-        write_text_safely(password)
+        if not write_text_safely(password, lambda: self.adapter.is_foreground(rect)):
+            return False
         return self.adapter.is_foreground(rect)
 
     def submit_credentials(self, rect: dict) -> bool:
@@ -241,7 +274,15 @@ class GPHandler:
         return True
 
 
-    def wait_connected_or_fail(self, capam_ip: str, port: int = 443, timeout_sec: int = 25) -> str:
+    def wait_connected_or_fail(
+        self,
+        capam_ip: str,
+        port: int = 443,
+        timeout_sec: int = 25,
+        keep_foreground_rect: dict | None = None,
+        restore_if_capam_foreground: bool = False,
+        suppress_browser_foreground: bool = False,
+    ) -> str:
         """Chờ VPN kết nối hoặc phát hiện lỗi xác thực.
 
         Polling mỗi 0.5 giây, tối đa timeout_sec giây.
@@ -249,9 +290,27 @@ class GPHandler:
             'CONNECTED' | 'AUTH_FAILED' | 'TIMEOUT'
         """
         deadline = time.monotonic() + timeout_sec
+        next_ping_at = time.monotonic()
         while time.monotonic() < deadline:
+            if self._cancelled():
+                return "TIMEOUT"
             poll_started = time.monotonic()
-            # Kiểm tra kết nối mạng
+            if keep_foreground_rect and restore_if_capam_foreground:
+                capam_rect = self.adapter.get_capam_main_rect()
+                if capam_rect and self.adapter.is_foreground(capam_rect):
+                    self.adapter.focus_rect(keep_foreground_rect)
+            # GP log is authoritative. CAPAM may intentionally block TCP 443.
+            state = self.read_state(read_all=False)
+            if state == STATE_CONNECTED:
+                if suppress_browser_foreground:
+                    # Browser callback is normally activated immediately after this log event.
+                    time.sleep(0.15)
+                    self.adapter.suppress_browser_foreground()
+                return "CONNECTED"
+            if state == STATE_AUTH_FAILED:
+                return "AUTH_FAILED"
+
+            # TCP probe remains useful when GP log is delayed or unavailable.
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                     s.settimeout(0.2)
@@ -259,11 +318,11 @@ class GPHandler:
                 return "CONNECTED"
             except Exception:
                 pass
-            # Kiểm tra lỗi xác thực trong log mới
-            state = self.read_state(read_all=False)
-            if state == STATE_AUTH_FAILED:
-                return "AUTH_FAILED"
-            remaining = min(deadline, poll_started + 0.5) - time.monotonic()
+            if poll_started >= next_ping_at:
+                if self._ping_host(capam_ip):
+                    return "CONNECTED"
+                next_ping_at = poll_started + 1.0
+            remaining = min(deadline, poll_started + 0.25) - time.monotonic()
             if remaining > 0:
                 time.sleep(remaining)
         return "TIMEOUT"

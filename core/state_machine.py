@@ -21,22 +21,30 @@ class AutomationWorker(QThread):
     finished_signal = pyqtSignal(bool)
 
     def __init__(self, username: str, password_prefix: str, otp: str,
-                 server_choice: str, capam_ip: str):
+                 server_choice: str, capam_ip: str,
+                 suppress_browser_foreground: bool = True):
         super().__init__()
         self.username = username
         self.password_prefix = password_prefix
         self.otp = otp
         self.server_choice = server_choice  # "200", "12", or "none"
         self.capam_ip = capam_ip
+        self.suppress_browser_foreground = suppress_browser_foreground
 
         self._adapter = get_os_adapter()
-        self._gp = GPHandler(self._adapter, log_fn=self._log)
-        self._capam = CAPAMHandler(self._adapter, capam_ip, log_fn=self._log)
-        self._rdp = RDPHandler(self._adapter, log_fn=self._log)
+        self._gp = GPHandler(self._adapter, log_fn=self._log, cancel_fn=self.isInterruptionRequested)
+        self._capam = CAPAMHandler(
+            self._adapter, capam_ip, log_fn=self._log, cancel_fn=self.isInterruptionRequested
+        )
+        self._rdp = RDPHandler(
+            self._adapter, log_fn=self._log, cancel_fn=self.isInterruptionRequested
+        )
         self._gp_visual_state = STATE_UNKNOWN
         self._gp_visual_count = 0
         self._gp_portal_submitted_at = 0.0
         self._capam_launched_early = False
+        self._gp_submitted_rect = None
+        self._device_list_rect = None
 
     def _log(self, msg: str) -> None:
         self.log_signal.emit(f"[*] {msg}")
@@ -55,7 +63,7 @@ class AutomationWorker(QThread):
 
     def _state_reset_capam(self) -> str:
         """Đóng CAPAM cũ để mỗi lượt automation bắt đầu từ màn hình Address."""
-        capam_rect = self._adapter.get_window_rect("Symantec Privileged Access Manager")
+        capam_rect = self._adapter.get_capam_main_rect()
         if not capam_rect:
             return "CHECK_VPN"
 
@@ -65,7 +73,7 @@ class AutomationWorker(QThread):
             return "ERROR"
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            if not self._adapter.get_window_rect("Symantec Privileged Access Manager"):
+            if not self._adapter.get_capam_main_rect():
                 self._log("Đã đóng phiên CAPAM cũ.")
                 return "CHECK_VPN"
             time.sleep(0.2)
@@ -106,8 +114,8 @@ class AutomationWorker(QThread):
             visual_state = STATE_CREDENTIALS
         else:
             visual_state = STATE_UNKNOWN
-            # Chỉ dùng trạng thái từ log khi OpenCV không phát hiện được ô nhập nào
-            if state == STATE_UNKNOWN or (state == STATE_AUTH_FAILED and attempt == 1):
+            # Never type from stale log state without visual field confirmation.
+            if state not in (STATE_CONNECTED, STATE_AUTH_FAILED) or attempt == 1:
                 state = STATE_UNKNOWN
 
         if visual_state != STATE_UNKNOWN:
@@ -152,8 +160,7 @@ class AutomationWorker(QThread):
             self._log("Đang khởi động sớm CAPAM Client để tiết kiệm thời gian chờ VPN...")
             if self._adapter.launch_capam():
                 self._capam_launched_early = True
-                # CAPAM may claim foreground while starting; restore GP before polling VPN.
-                self._adapter.focus_rect(rect)
+            self._gp_submitted_rect = rect.copy()
 
             return "GP_WAIT_CONNECT"
 
@@ -170,7 +177,13 @@ class AutomationWorker(QThread):
     def _state_gp_wait_connect(self) -> str:
         """State 2c: Chờ VPN kết nối hoặc phát hiện lỗi xác thực."""
         self._log("Đang chờ xác minh kết nối VPN...")
-        result = self._gp.wait_connected_or_fail(self.capam_ip, timeout_sec=25)
+        result = self._gp.wait_connected_or_fail(
+            self.capam_ip,
+            timeout_sec=25,
+            keep_foreground_rect=self._gp_submitted_rect,
+            restore_if_capam_foreground=self._capam_launched_early,
+            suppress_browser_foreground=self.suppress_browser_foreground,
+        )
         if result == "CONNECTED":
             self._log("GlobalProtect đã kết nối VPN thành công!")
             return "CAPAM_LAUNCH"
@@ -187,7 +200,7 @@ class AutomationWorker(QThread):
         if getattr(self, "_capam_launched_early", False):
             started = time.monotonic()
             while time.monotonic() < started + 20:
-                if self._adapter.get_window_rect("Symantec Privileged Access Manager"):
+                if self._adapter.get_capam_main_rect():
                     return "CAPAM_ADDRESS"
                 time.sleep(0.5)
             self._log("Lỗi: Quá thời gian chờ CAPAM Client xuất hiện.")
@@ -201,12 +214,15 @@ class AutomationWorker(QThread):
 
     def _state_capam_address(self) -> str:
         """State 3b: Nhập IP trên màn hình Address của CAPAM."""
-        capam_rect = self._adapter.get_window_rect("Symantec Privileged Access Manager")
+        capam_rect = self._adapter.get_capam_main_rect()
         if not capam_rect:
             self._log("Lỗi: Cửa sổ CAPAM chưa xuất hiện sau khi VPN kết nối.")
             return "ERROR"
-        if not self._adapter.focus_rect(capam_rect):
-            self._log("Lỗi: Không thể đưa cửa sổ CAPAM lên foreground để nhận diện Address.")
+        self._log("Đang chờ browser thông báo VPN nhả foreground và kích hoạt CAPAM...")
+        if self.suppress_browser_foreground and self._adapter.suppress_browser_foreground():
+            self._log("Đã thu nhỏ browser callback của GlobalProtect.")
+        if not self._adapter.wait_focus_rect(capam_rect, timeout=8.0):
+            self._log("Lỗi: Không thể đưa đúng cửa sổ CAPAM lên foreground sau 8 giây.")
             return "ERROR"
         self._log("Đã đưa đúng cửa sổ CAPAM lên foreground; bắt đầu nhận diện ô Address...")
         time.sleep(0.2)
@@ -245,12 +261,17 @@ class AutomationWorker(QThread):
         rect = self._rdp.wait_for_device_list(self.capam_ip)
         if not rect:
             return "ERROR"
+        self._device_list_rect = rect.copy()
         return "RDP_CLICK"
 
     def _state_rdp_click(self) -> str:
         """State 5b: Tìm và click nút RDP."""
         self._log(f"Đang tìm và click nút RDP cho thiết bị {self.server_choice}...")
-        if not self._rdp.click_rdp(self.server_choice, self.capam_ip):
+        if not self._rdp.click_rdp(
+            self.server_choice,
+            self.capam_ip,
+            expected_rect=self._device_list_rect,
+        ):
             self._log("Không tìm thấy nút RDP trong thời gian chờ.")
             return "ERROR"
         return "WINDOWS_SECURITY"
@@ -273,6 +294,10 @@ class AutomationWorker(QThread):
         gp_attempts = 0
 
         while True:
+            if self.isInterruptionRequested():
+                self._log("Đã hủy kịch bản tự động hóa.")
+                self.finished_signal.emit(False)
+                return
             if state == "RESET_CAPAM":
                 state = self._state_reset_capam()
 
