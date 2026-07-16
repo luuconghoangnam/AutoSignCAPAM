@@ -78,7 +78,53 @@ class LinuxAdapter(OSAdapter):
         subprocess.run(["pkill", "-f", "CAPAMClient"], check=False)
         
     def launch_capam(self):
-        subprocess.Popen([os.path.expanduser("~/CAPAMClient/CAPAMClient")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        capam_dir = os.path.expanduser("~/CAPAMClient")
+        capam_path = os.path.join(capam_dir, "CAPAMClient")
+        capam_real_path = os.path.join(capam_dir, "CAPAMClient.real")
+
+        # Đảm bảo wrapper shell script được cấu hình để ép vẽ đồ hoạ bằng CPU
+        if os.path.exists(capam_path):
+            is_elf = False
+            try:
+                with open(capam_path, 'rb') as f:
+                    header = f.read(4)
+                    if header == b'\x7fELF':
+                        is_elf = True
+            except Exception:
+                pass
+
+            if is_elf:
+                if os.path.exists(capam_real_path):
+                    try:
+                        os.remove(capam_real_path)
+                    except Exception:
+                        pass
+                try:
+                    os.rename(capam_path, capam_real_path)
+                except Exception:
+                    pass
+
+            # Tạo wrapper script để ép buộc CPU rendering và tắt tăng tốc phần cứng
+            wrapper_content = (
+                "#!/bin/bash\n"
+                "# Ep buoc Java ve do hoa bang CPU de tranh nhap nhay man hinh (Kubuntu/KDE)\n"
+                "export _JAVA_OPTIONS=\"-Dsun.java2d.opengl=false -Dsun.java2d.xrender=false -Dsun.java2d.pmoffscreen=false\"\n"
+                "export J2D_USE_MITSHM=false\n"
+                "export _JAVA_AWT_WM_NONREPARENTING=1\n"
+                f'exec "{capam_real_path}" "$@"\n'
+            )
+            try:
+                with open(capam_path, 'w', encoding='utf-8') as f:
+                    f.write(wrapper_content)
+                os.chmod(capam_path, 0o755)
+            except Exception:
+                pass
+
+        env = os.environ.copy()
+        env["_JAVA_OPTIONS"] = "-Dsun.java2d.opengl=false -Dsun.java2d.xrender=false -Dsun.java2d.pmoffscreen=false"
+        env["J2D_USE_MITSHM"] = "false"
+        env["_JAVA_AWT_WM_NONREPARENTING"] = "1"
+        subprocess.Popen([capam_path], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
     def launch_gp_ui(self):
         GP_UI  = "/opt/paloaltonetworks/globalprotect/PanGPUI"
@@ -855,7 +901,8 @@ class MainWindow(QMainWindow):
         
     def initUI(self):
         self.settings_file = os.path.expanduser("~/.capam_autosign_settings.json")
-        self.setWindowTitle('CAPAM Auto-Sign In Tool (Kubuntu Edition)')
+        self.setWindowTitle('CAPAM AutoSign')
+        self.setWindowIcon(QIcon(get_resource_path('app_icon.png')))
         self.setFixedSize(480, 530)
 
         self.setStyleSheet("""

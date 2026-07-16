@@ -10,6 +10,7 @@ python3 -m PyInstaller --noconsole --onefile \
     --add-data "template_rdp.png:." \
     --add-data "template_200.png:." \
     --add-data "template_12.png:." \
+    --add-data "app_icon.png:." \
     --exclude-module PyQt5.QtWebEngine \
     --exclude-module PyQt5.QtWebEngineWidgets \
     --exclude-module PyQt5.QtWebKit \
@@ -34,10 +35,16 @@ python3 -m PyInstaller --noconsole --onefile \
     --exclude-module matplotlib \
     --exclude-module IPython \
     --exclude-module jinja2 \
-    --name "CAPAM_AutoSign_Linux" \
+    --name "CAPAM AutoSign" \
     main_automation.py
 
 echo "Đang dọn dẹp các tệp tin tạm (build, spec)..."
 rm -rf build/ *.spec
 
-echo "HOÀN TẤT! File chạy độc lập nằm trong thư mục: dist/CAPAM_AutoSign_Linux"
+echo "HOÀN TẤT! File chạy độc lập nằm trong thư mục: dist/CAPAM AutoSign"
+
+# Hỗ trợ phân vùng NTFS (không gán được quyền thực thi trực tiếp)
+echo "Đang sao chép file chạy sang thư mục Home (~/) để cấp quyền thực thi..."
+cp "dist/CAPAM AutoSign" "$HOME/CAPAM AutoSign"
+chmod +x "$HOME/CAPAM AutoSign"
+echo "HOÀN THÀNH! Bạn có thể kích đúp hoặc chạy ứng dụng từ thư mục Home: ~/CAPAM AutoSign"
