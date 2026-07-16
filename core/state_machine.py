@@ -258,7 +258,7 @@ class AutomationWorker(QThread):
 
     def _state_rdp_wait_list(self) -> str:
         """State 5a: Chờ danh sách thiết bị CAPAM xuất hiện."""
-        rect = self._rdp.wait_for_device_list(self.capam_ip)
+        rect = self._rdp.wait_for_device_list(self.capam_ip, max_wait=60)
         if not rect:
             return "ERROR"
         self._device_list_rect = rect.copy()
@@ -270,6 +270,7 @@ class AutomationWorker(QThread):
         if not self._rdp.click_rdp(
             self.server_choice,
             self.capam_ip,
+            max_wait=60,
             expected_rect=self._device_list_rect,
         ):
             self._log("Không tìm thấy nút RDP trong thời gian chờ.")
@@ -290,74 +291,80 @@ class AutomationWorker(QThread):
     def run(self) -> None:
         import pyautogui
         pyautogui.PAUSE = 0.1
-        state = "RESET_CAPAM"
-        gp_attempts = 0
 
-        while True:
-            if self.isInterruptionRequested():
-                self._log("Đã hủy kịch bản tự động hóa.")
-                self.finished_signal.emit(False)
-                return
-            if state == "RESET_CAPAM":
-                state = self._state_reset_capam()
+        try:
+            state = "RESET_CAPAM"
+            gp_attempts = 0
 
-            elif state == "CHECK_VPN":
-                state = self._state_check_vpn()
-
-            elif state == "GP_START":
-                state = self._state_gp_start()
-
-            elif state == "GP_DETECT":
-                gp_attempts += 1
-                if gp_attempts > 60:
-                    self._log("Không nhận diện được GlobalProtect trong 30 giây. Dừng lại.")
+            while True:
+                if self.isInterruptionRequested():
+                    self._log("Đã hủy kịch bản tự động hóa.")
                     self.finished_signal.emit(False)
                     return
-                state = self._state_gp_detect(gp_attempts)
+                if state == "RESET_CAPAM":
+                    state = self._state_reset_capam()
 
-            elif state == "GP_WAIT_CONNECT":
-                state = self._state_gp_wait_connect()
+                elif state == "CHECK_VPN":
+                    state = self._state_check_vpn()
 
-            elif state == "GP_AUTH_FAILED":
-                self._log("[LỖI] Sai tài khoản, mật khẩu hoặc mã OTP GlobalProtect!")
-                self.finished_signal.emit(False)
-                return
+                elif state == "GP_START":
+                    state = self._state_gp_start()
 
-            elif state == "GP_TIMEOUT":
-                self._log("[LỖI] Quá thời gian kết nối VPN. Đăng nhập GP thất bại.")
-                self.finished_signal.emit(False)
-                return
+                elif state == "GP_DETECT":
+                    gp_attempts += 1
+                    if gp_attempts > 60:
+                        self._log("Không nhận diện được GlobalProtect trong 30 giây. Dừng lại.")
+                        self.finished_signal.emit(False)
+                        return
+                    state = self._state_gp_detect(gp_attempts)
 
-            elif state == "CAPAM_LAUNCH":
-                state = self._state_capam_launch()
+                elif state == "GP_WAIT_CONNECT":
+                    state = self._state_gp_wait_connect()
 
-            elif state == "CAPAM_ADDRESS":
-                state = self._state_capam_address()
+                elif state == "GP_AUTH_FAILED":
+                    self._log("[LỖI] Sai tài khoản, mật khẩu hoặc mã OTP GlobalProtect!")
+                    self.finished_signal.emit(False)
+                    return
 
-            elif state == "CAPAM_LOGIN":
-                state = self._state_capam_login()
+                elif state == "GP_TIMEOUT":
+                    self._log("[LỖI] Quá thời gian kết nối VPN. Đăng nhập GP thất bại.")
+                    self.finished_signal.emit(False)
+                    return
+
+                elif state == "CAPAM_LAUNCH":
+                    state = self._state_capam_launch()
+
+                elif state == "CAPAM_ADDRESS":
+                    state = self._state_capam_address()
+
+                elif state == "CAPAM_LOGIN":
+                    state = self._state_capam_login()
 
 
-            elif state == "RDP_WAIT_LIST":
-                state = self._state_rdp_wait_list()
+                elif state == "RDP_WAIT_LIST":
+                    state = self._state_rdp_wait_list()
 
-            elif state == "RDP_CLICK":
-                state = self._state_rdp_click()
+                elif state == "RDP_CLICK":
+                    state = self._state_rdp_click()
 
-            elif state == "WINDOWS_SECURITY":
-                state = self._state_windows_security()
+                elif state == "WINDOWS_SECURITY":
+                    state = self._state_windows_security()
 
-            elif state == "DONE":
-                self._log("==> KỊCH BẢN TỰ ĐỘNG HÓA HOÀN TẤT! <==")
-                self.finished_signal.emit(True)
-                return
+                elif state == "DONE":
+                    self._log("==> KỊCH BẢN TỰ ĐỘNG HÓA HOÀN TẤT! <==")
+                    self.finished_signal.emit(True)
+                    return
 
-            elif state == "ERROR":
-                self._log("[LỖI] Kịch bản tự động hóa kết thúc do lỗi.")
-                self.finished_signal.emit(False)
-                return
+                elif state == "ERROR":
+                    self._log("[LỖI] Kịch bản tự động hóa kết thúc do lỗi.")
+                    self.finished_signal.emit(False)
+                    return
 
-            else:
-                self._log(f"[LỖI] Trạng thái không xác định: {state}")
-                self.finished_signal.emit(False)
-                return
+                else:
+                    self._log(f"[LỖI] Trạng thái không xác định: {state}")
+                    self.finished_signal.emit(False)
+                    return
+        except Exception as e:
+            self._log(f"[LỖI NGOẠI LỆ] {e}")
+            self.finished_signal.emit(False)
+            return

@@ -192,7 +192,10 @@ class WindowsAdapter(OSAdapter):
         return None
 
     def suppress_browser_foreground(self) -> bool:
-        browsers = {"chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe"}
+        browsers = {
+            "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe",
+            "opera.exe", "coccoc.exe", "whale.exe", "iexplore.exe"
+        }
         if self._foreground_process_name() not in browsers:
             return False
         try:

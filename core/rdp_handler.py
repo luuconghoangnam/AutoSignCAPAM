@@ -56,7 +56,7 @@ class RDPHandler:
             return False
         return all(previous.get(key) == current.get(key) for key in ("id", "x", "y", "w", "h"))
 
-    def wait_for_device_list(self, capam_ip: str, max_wait: int = 30) -> dict | None:
+    def wait_for_device_list(self, capam_ip: str, max_wait: int = 60) -> dict | None:
         """Chờ cửa sổ danh sách thiết bị CAPAM xuất hiện.
         Returns: rect dict hoặc None nếu timeout.
         """
@@ -80,7 +80,7 @@ class RDPHandler:
         self,
         device_choice: str,
         capam_ip: str,
-        max_wait: int = 30,
+        max_wait: int = 60,
         expected_rect: dict | None = None,
     ) -> bool:
         """Chụp cửa sổ CAPAM, tìm và click nút RDP cho thiết bị được chọn.

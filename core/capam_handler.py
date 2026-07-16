@@ -222,57 +222,62 @@ class CAPAMHandler:
             self._log("[Address] Không tìm thấy ô Address để nhập IP.")
             return False
 
-        for attempt in range(3):
-            if attempt > 0:
-                self._log(f"[Address] Thử lại nhập IP lần {attempt + 1}...")
-
-            if not self.adapter.focus_rect(rect):
-                self._log("[Address] Không thể đưa CAPAM lên foreground trước khi nhập.")
-                time.sleep(0.5)
-                continue
-            current_rect = self.adapter.get_window_rect_for_hwnd(rect.get("id"))
-            if not current_rect or any(
-                rect.get(key) != current_rect.get(key) for key in ("id", "w", "h")
-            ):
-                self._log("[Address] Cửa sổ đã thay đổi kích thước hoặc instance; hủy thao tác cũ.")
-                return False
-            rect = current_rect
-
-            x0, y0, w0, h0 = fields[0]
-            click_x = rect["x"] + x0 + w0 // 2
-            click_y = rect["y"] + y0 + h0 // 2
-
-            self._log(f"[Address] Điền IP '{self.capam_ip}' vào ô tại ({click_x}, {click_y}).")
-            pyautogui.click(click_x, click_y)
-            time.sleep(0.05)
-            if not self.adapter.is_foreground(rect):
-                self._log("[Address] Foreground đổi sau click; dừng nhập IP.")
-                return False
-            pyautogui.hotkey("ctrl", "a")
-            time.sleep(0.05)
-            pyautogui.press("backspace")
-            time.sleep(0.05)
-            if not write_text_safely(self.capam_ip, lambda: self.adapter.is_foreground(rect)):
-                return False
-            time.sleep(0.1)
-
-            # Giữ focus trong ô Address rồi Enter; không click nút theo tọa độ để
-            # tránh nhầm nút Cancel khi layout CAPAM thay đổi.
-            pyautogui.click(click_x, click_y)
-            time.sleep(0.05)
-            if not self.adapter.is_foreground(rect):
-                self._log("[Address] Foreground đổi; không nhấn Enter.")
-                return False
-            pyautogui.press("enter")
-            self._log(
-                f"Đã xóa và nhập lại IP '{self.capam_ip}', nhấn Enter trong ô Address. "
-                "Chờ màn hình đăng nhập..."
-            )
-            time.sleep(0.25)
-            return True
+        if not self.adapter.is_foreground(rect):
+            self._log("[Address] Bị mất Focus. Đang ép lôi cửa sổ CAPAM lên trên cùng...")
+            self.adapter.focus_rect(rect)
+            time.sleep(0.3)
             
-        self._log("[Address] Thất bại sau 3 lần thử nhập IP.")
-        return False
+            if not self.adapter.is_foreground(rect):
+                self._log("[Address] Ép Focus thất bại. Trình duyệt vẫn đang che khuất.")
+                return False
+                
+            self._log("[Address] Đã ép Focus thành công. Chạy Vision check lại để xác nhận...")
+            new_fields = self._detect_address_field(rect)
+            if not new_fields:
+                self._log("[Address] Vision check thất bại, không tìm thấy ô nhập.")
+                return False
+            fields = new_fields
+
+        current_rect = self.adapter.get_window_rect_for_hwnd(rect.get("id"))
+        if not current_rect or any(
+            rect.get(key) != current_rect.get(key) for key in ("id", "w", "h")
+        ):
+            self._log("[Address] Cửa sổ đã thay đổi kích thước hoặc instance; hủy thao tác cũ.")
+            return False
+        rect = current_rect
+
+        x0, y0, w0, h0 = fields[0]
+        click_x = rect["x"] + x0 + w0 // 2
+        click_y = rect["y"] + y0 + h0 // 2
+
+        self._log(f"[Address] Điền IP '{self.capam_ip}' vào ô tại ({click_x}, {click_y}).")
+        pyautogui.click(click_x, click_y)
+        time.sleep(0.05)
+        if not self.adapter.is_foreground(rect):
+            self._log("[Address] Foreground đổi sau click; dừng nhập IP.")
+            return False
+        pyautogui.hotkey("ctrl", "a")
+        time.sleep(0.05)
+        pyautogui.press("backspace")
+        time.sleep(0.05)
+        if not write_text_safely(self.capam_ip, lambda: self.adapter.is_foreground(rect)):
+            return False
+        time.sleep(0.1)
+
+        # Giữ focus trong ô Address rồi Enter; không click nút theo tọa độ để
+        # tránh nhầm nút Cancel khi layout CAPAM thay đổi.
+        pyautogui.click(click_x, click_y)
+        time.sleep(0.05)
+        if not self.adapter.is_foreground(rect):
+            self._log("[Address] Foreground đổi; không nhấn Enter.")
+            return False
+        pyautogui.press("enter")
+        self._log(
+            f"Đã xóa và nhập lại IP '{self.capam_ip}', nhấn Enter trong ô Address. "
+            "Chờ màn hình đăng nhập..."
+        )
+        time.sleep(0.25)
+        return True
 
     # ------------------------------------------------------------------
     # Bước 2: Màn hình Login (Username + Password)
