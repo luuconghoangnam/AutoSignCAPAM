@@ -24,9 +24,10 @@ _MIN_FIELD_WIDTH_RATIO = 0.25
 class RDPHandler:
     """Xử lý luồng click RDP và điền thông tin Windows Security."""
 
-    def __init__(self, adapter: OSAdapter, log_fn=None):
+    def __init__(self, adapter: OSAdapter, log_fn=None, cancel_fn=None):
         self.adapter = adapter
         self._log = log_fn or (lambda msg: None)
+        self._cancelled = cancel_fn or (lambda: False)
         run_id = f"{os.getpid()}_{uuid.uuid4().hex}"
         self._screenshot_tmp = os.path.join(tempfile.gettempdir(), f"capam_window_{run_id}.png")
         self._win_sec_tmp = os.path.join(tempfile.gettempdir(), f"win_sec_{run_id}.png")
@@ -63,8 +64,10 @@ class RDPHandler:
         started = time.monotonic()
         deadline = started + max_wait
         while time.monotonic() < deadline:
+            if self._cancelled():
+                return None
             poll_started = time.monotonic()
-            rect = self.adapter.get_window_rect(target_title)
+            rect = self.adapter.get_window_rect(target_title, exact=True)
             if rect:
                 elapsed = time.monotonic() - started
                 self._log(f"Đã phát hiện danh sách thiết bị sau {elapsed:.1f} giây.")
@@ -73,7 +76,13 @@ class RDPHandler:
         self._log("Quá thời gian chờ danh sách thiết bị CAPAM.")
         return None
 
-    def click_rdp(self, device_choice: str, capam_ip: str, max_wait: int = 30) -> bool:
+    def click_rdp(
+        self,
+        device_choice: str,
+        capam_ip: str,
+        max_wait: int = 30,
+        expected_rect: dict | None = None,
+    ) -> bool:
         """Chụp cửa sổ CAPAM, tìm và click nút RDP cho thiết bị được chọn.
         Kiểm tra mỗi 0.5 giây trong tối đa max_wait giây.
         Returns: True nếu click thành công.
@@ -86,16 +95,24 @@ class RDPHandler:
         stable_count = 0
         next_detail_log = started
         while time.monotonic() < deadline:
+            if self._cancelled():
+                return False
             poll_started = time.monotonic()
             elapsed = time.monotonic() - started
             verbose = poll_started >= next_detail_log
             if verbose:
                 self._log(f"Đang tìm nút RDP... ({elapsed:.1f}/{max_wait}s)")
                 next_detail_log = poll_started + 2
-            rect = self.adapter.get_window_rect(target_title)
+            rect = (
+                self.adapter.get_window_rect_for_hwnd(expected_rect.get("id"))
+                if expected_rect else self.adapter.get_window_rect(target_title, exact=True)
+            )
             if not rect:
                 self._wait_next_poll(poll_started, deadline)
                 continue
+            if expected_rect and rect.get("id") != expected_rect.get("id"):
+                self._log("Instance danh sách thiết bị CAPAM đã thay đổi; hủy click RDP.")
+                return False
             try:
                 self.adapter.take_screenshot(rect, self._screenshot_tmp)
             except Exception as e:
@@ -130,7 +147,7 @@ class RDPHandler:
                 if stable_count < 2:
                     self._wait_next_poll(poll_started, deadline)
                     continue
-                current_rect = self.adapter.get_window_rect(target_title)
+                current_rect = self.adapter.get_window_rect_for_hwnd(rect.get("id"))
                 if not self._same_rect(rect, current_rect or {}):
                     stable_count = 0
                     previous_result = None
@@ -139,7 +156,7 @@ class RDPHandler:
                 if not self.adapter.focus_rect(rect):
                     stable_count = 0
                     continue
-                current_rect = self.adapter.get_window_rect(target_title)
+                current_rect = self.adapter.get_window_rect_for_hwnd(rect.get("id"))
                 if not self._same_rect(rect, current_rect or {}):
                     stable_count = 0
                     previous_result = None
@@ -172,8 +189,13 @@ class RDPHandler:
         started = time.monotonic()
         deadline = started + 30
         while time.monotonic() < deadline:
+            if self._cancelled():
+                return False
             for candidate_title in WIN_SEC_TITLES:
-                rect = self.adapter.get_window_rect(candidate_title, exact=True)
+                if candidate_title == WIN_SEC_TITLE:
+                    rect = self.adapter.get_capam_dialog_rect()
+                else:
+                    rect = self.adapter.get_window_rect(candidate_title, exact=True)
                 if rect:
                     window_title = candidate_title
                     elapsed = time.monotonic() - started
@@ -197,9 +219,11 @@ class RDPHandler:
         started = time.monotonic()
         deadline = started + 15
         while time.monotonic() < deadline:
+            if self._cancelled():
+                return False
             poll_started = time.monotonic()
             try:
-                current_rect = self.adapter.get_window_rect(window_title, exact=True)
+                current_rect = self.adapter.get_window_rect_for_hwnd(rect.get("id"))
                 if not current_rect:
                     raise RuntimeError("Cửa sổ xác thực đã đóng.")
                 rect = current_rect
@@ -243,11 +267,11 @@ class RDPHandler:
             if attempt > 0:
                 self._log(f"Thử lại điền Windows Security lần {attempt + 1}...")
 
-            if not self.adapter.focus_rect(rect):
+            if not self.adapter.wait_focus_rect(rect, timeout=5.0):
                 self._log("Không thể đưa overlay xác thực lên foreground trước khi nhập.")
                 time.sleep(0.5)
                 continue
-            current_rect = self.adapter.get_window_rect(window_title, exact=True)
+            current_rect = self.adapter.get_window_rect_for_hwnd(rect.get("id"))
             if not self._same_rect(rect, current_rect or {}):
                 self._log("Bảng xác thực đã di chuyển hoặc thay đổi; không nhập thông tin vào tọa độ cũ.")
                 return False
@@ -262,7 +286,8 @@ class RDPHandler:
                 return False
             pyautogui.hotkey("ctrl", "a")
             time.sleep(0.1)
-            write_text_safely(username)
+            if not write_text_safely(username, lambda: self.adapter.is_foreground(rect)):
+                return False
             self._log(f"Đã nhập Username Windows Security: {username}")
 
             # Password
@@ -276,7 +301,8 @@ class RDPHandler:
                 return False
             pyautogui.hotkey("ctrl", "a")
             time.sleep(0.1)
-            write_text_safely(password)
+            if not write_text_safely(password, lambda: self.adapter.is_foreground(rect)):
+                return False
             self._log("Đã nhập Password Windows Security.")
 
             time.sleep(0.3)

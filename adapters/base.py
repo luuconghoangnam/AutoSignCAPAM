@@ -23,6 +23,14 @@ class OSAdapter:
         """Focus exact window instance represented by rect/HWND."""
         return False
 
+    def wait_focus_rect(self, rect: dict, timeout: float = 5.0) -> bool:
+        """Retry exact target focus while transient windows finish opening."""
+        return self.focus_rect(rect)
+
+    def suppress_browser_foreground(self) -> bool:
+        """Minimize browser only when it currently owns foreground."""
+        return False
+
     def is_foreground(self, rect: dict) -> bool:
         """Return whether exact window instance currently owns foreground."""
         return True
@@ -33,6 +41,18 @@ class OSAdapter:
         Returns:
             Dict với keys 'x', 'y', 'w', 'h' hoặc None nếu không tìm thấy.
         """
+        return None
+
+    def get_capam_main_rect(self) -> dict | None:
+        """Return main CAPAM window, excluding same-title dialogs."""
+        return self.get_window_rect("Symantec Privileged Access Manager", exact=True)
+
+    def get_capam_dialog_rect(self) -> dict | None:
+        """Return same-title CAPAM child dialog, excluding main window."""
+        return self.get_window_rect("Symantec Privileged Access Manager", exact=True)
+
+    def get_window_rect_for_hwnd(self, hwnd) -> dict | None:
+        """Return current rect for exact window instance."""
         return None
 
     def take_screenshot(self, rect: dict, path: str) -> None:

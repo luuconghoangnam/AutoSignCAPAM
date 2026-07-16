@@ -35,10 +35,11 @@ _ADDRESS_FIELD_ROI = (0.38, 0.36, 0.80, 0.64)
 class CAPAMHandler:
     """Xử lý khởi động CAPAM Client và đăng nhập 2 bước (Address → Login)."""
 
-    def __init__(self, adapter: OSAdapter, capam_ip: str, log_fn=None):
+    def __init__(self, adapter: OSAdapter, capam_ip: str, log_fn=None, cancel_fn=None):
         self.adapter = adapter
         self.capam_ip = capam_ip
         self._log = log_fn or (lambda msg: None)
+        self._cancelled = cancel_fn or (lambda: False)
         self._screenshot_tmp = os.path.join(
             tempfile.gettempdir(), f"capam_crop_{os.getpid()}_{uuid.uuid4().hex}.png"
         )
@@ -52,7 +53,7 @@ class CAPAMHandler:
         Returns: True nếu tìm thấy cửa sổ trong thời gian chờ.
         """
         self._log("Đang khởi động CAPAM Client...")
-        existing = self.adapter.get_window_rect(CAPAM_WINDOW_TITLE)
+        existing = self.adapter.get_capam_main_rect()
         if existing:
             self._log("CAPAM Client đã mở, dùng lại cửa sổ hiện có.")
             return True
@@ -62,7 +63,9 @@ class CAPAMHandler:
         started = time.monotonic()
         deadline = started + max_wait
         while time.monotonic() < deadline:
-            rect = self.adapter.get_window_rect(CAPAM_WINDOW_TITLE)
+            if self._cancelled():
+                return False
+            rect = self.adapter.get_capam_main_rect()
             if rect:
                 elapsed = time.monotonic() - started
                 self._log(f"Đã phát hiện cửa sổ CAPAM Client sau {elapsed:.1f} giây.")
@@ -176,8 +179,10 @@ class CAPAMHandler:
         previous_fields = []
         previous_rect = None
         while time.monotonic() < deadline:
+            if self._cancelled():
+                return None, []
             poll_started = time.monotonic()
-            rect = self.adapter.get_window_rect(CAPAM_WINDOW_TITLE)
+            rect = self.adapter.get_capam_main_rect()
             if rect:
                 ratio = rect["h"] / rect["w"]
                 # Màn hình Address dẹt hơn (ratio ~0.45). Chỉ quét khi tỷ lệ nhỏ hơn 0.55
@@ -225,7 +230,7 @@ class CAPAMHandler:
                 self._log("[Address] Không thể đưa CAPAM lên foreground trước khi nhập.")
                 time.sleep(0.5)
                 continue
-            current_rect = self.adapter.get_window_rect(CAPAM_WINDOW_TITLE)
+            current_rect = self.adapter.get_window_rect_for_hwnd(rect.get("id"))
             if not current_rect or any(
                 rect.get(key) != current_rect.get(key) for key in ("id", "w", "h")
             ):
@@ -247,7 +252,8 @@ class CAPAMHandler:
             time.sleep(0.05)
             pyautogui.press("backspace")
             time.sleep(0.05)
-            write_text_safely(self.capam_ip)
+            if not write_text_safely(self.capam_ip, lambda: self.adapter.is_foreground(rect)):
+                return False
             time.sleep(0.1)
 
             # Giữ focus trong ô Address rồi Enter; không click nút theo tọa độ để
@@ -283,8 +289,10 @@ class CAPAMHandler:
         previous_fields = []
         previous_rect = None
         while time.monotonic() < deadline:
+            if self._cancelled():
+                return None, []
             poll_started = time.monotonic()
-            rect = self.adapter.get_window_rect(CAPAM_WINDOW_TITLE)
+            rect = self.adapter.get_capam_main_rect()
             if rect:
                 ratio = rect["h"] / rect["w"]
                 # Màn hình Login cao hơn (ratio ~0.65). Chỉ chấp nhận khi tỷ lệ >= 0.55
@@ -340,7 +348,7 @@ class CAPAMHandler:
                 self._log("[Login] Không thể đưa CAPAM lên foreground trước khi nhập.")
                 time.sleep(0.5)
                 continue
-            current_rect = self.adapter.get_window_rect(CAPAM_WINDOW_TITLE)
+            current_rect = self.adapter.get_window_rect_for_hwnd(rect.get("id"))
             if not current_rect or any(
                 rect.get(key) != current_rect.get(key) for key in ("id", "w", "h")
             ):
@@ -363,7 +371,8 @@ class CAPAMHandler:
             time.sleep(0.1)
             pyautogui.press("backspace")
             time.sleep(0.1)
-            write_text_safely(username)
+            if not write_text_safely(username, lambda: self.adapter.is_foreground(rect)):
+                return False
             self._log(f"[Login] Đã nhập tài khoản CAPAM: {username}")
 
             # Password (sử dụng phím TAB để chuyển ô, tránh lỗi OpenCV không nhận diện được ô có chứa sẵn dấu chấm đen)
@@ -379,7 +388,8 @@ class CAPAMHandler:
             time.sleep(0.1)
             pyautogui.press("backspace")
             time.sleep(0.1)
-            write_text_safely(password)
+            if not write_text_safely(password, lambda: self.adapter.is_foreground(rect)):
+                return False
             self._log("[Login] Đã nhập mật khẩu CAPAM.")
 
             time.sleep(0.3)

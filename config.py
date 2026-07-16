@@ -36,13 +36,13 @@ def get_resource_path(relative_path: str) -> str:
     return os.path.join(base_path, relative_path)
 
 
-def write_text_safely(text: str) -> None:
+def write_text_safely(text: str, target_active=None) -> bool:
     """Sao chép text vào clipboard và dán (Ctrl+V) để tránh lỗi bộ gõ tiếng Việt (Telex/VNI)
     biến các ký tự lặp thành chữ có dấu (ví dụ: 'Aa' -> 'Â').
     Sau khi dán, clipboard sẽ được phục hồi lại dữ liệu cũ để tránh ảnh hưởng đến người dùng.
     """
     if not text:
-        return
+        return True
     import pyperclip
     import pyautogui
     import time
@@ -56,10 +56,14 @@ def write_text_safely(text: str) -> None:
     try:
         pyperclip.copy(text)
         time.sleep(0.05)
+        if target_active and not target_active():
+            return False
         pyautogui.hotkey("ctrl", "v")
         time.sleep(0.05)
     except Exception:
         # Fallback trong trường hợp clipboard bị lỗi/chặn
+        if target_active and not target_active():
+            return False
         pyautogui.write(text, interval=0.03)
     finally:
         # Khôi phục lại clipboard cũ của người dùng
@@ -70,4 +74,5 @@ def write_text_safely(text: str) -> None:
                 pyperclip.copy("")
             except Exception:
                 pass
+    return True
 

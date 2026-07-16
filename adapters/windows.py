@@ -66,6 +66,9 @@ def _force_foreground(hwnd) -> bool:
         if user32.IsIconic(hwnd):
             user32.ShowWindow(hwnd, 9)  # SW_RESTORE
 
+        # Put exact target at top of normal Z-order, never TOPMOST.
+        # SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+        user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0040)
         user32.SetForegroundWindow(hwnd)
 
         # Chờ cửa sổ thực sự lên foreground
@@ -75,6 +78,26 @@ def _force_foreground(hwnd) -> bool:
                 return True
             time.sleep(0.02)
         return user32.GetForegroundWindow() == hwnd
+    except Exception:
+        return False
+
+
+def _switch_to_window(hwnd) -> bool:
+    """Task-switch exact HWND without making it topmost."""
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        if not user32.IsWindow(hwnd):
+            return False
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        user32.SwitchToThisWindow(hwnd, True)
+        deadline = time.monotonic() + 0.4
+        while time.monotonic() < deadline:
+            if user32.GetForegroundWindow() == hwnd:
+                return True
+            time.sleep(0.02)
+        return False
     except Exception:
         return False
 
@@ -146,6 +169,43 @@ def _launch_external(command: list[str], env: dict, cwd: str | None = None) -> N
 class WindowsAdapter(OSAdapter):
 
     @staticmethod
+    def _foreground_process_name() -> str | None:
+        try:
+            import ctypes
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            pid = ctypes.c_ulong()
+            ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            process = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid.value)
+            if not process:
+                return None
+            try:
+                buffer = ctypes.create_unicode_buffer(1024)
+                size = ctypes.c_ulong(len(buffer))
+                if ctypes.windll.kernel32.QueryFullProcessImageNameW(
+                    process, 0, buffer, ctypes.byref(size)
+                ):
+                    return os.path.basename(buffer.value).lower()
+            finally:
+                ctypes.windll.kernel32.CloseHandle(process)
+        except Exception:
+            pass
+        return None
+
+    def suppress_browser_foreground(self) -> bool:
+        browsers = {"chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe"}
+        if self._foreground_process_name() not in browsers:
+            return False
+        try:
+            import ctypes
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            if hwnd:
+                ctypes.windll.user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
+                return True
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
     def _find_window(title_keyword: str, exact: bool = False):
         import ctypes
         import pygetwindow as gw
@@ -156,7 +216,7 @@ class WindowsAdapter(OSAdapter):
 
         windows = [
             window for window in windows
-            if not window.isMinimized and window.width > 0 and window.height > 0
+            if window.width > 0 and window.height > 0
         ]
 
         if not windows:
@@ -201,6 +261,30 @@ class WindowsAdapter(OSAdapter):
         except Exception:
             return False
 
+    def wait_focus_rect(self, rect: dict, timeout: float = 5.0) -> bool:
+        hwnd = rect.get("id")
+        if not hwnd:
+            return False
+        deadline = time.monotonic() + timeout
+        attempt = 0
+        while time.monotonic() < deadline:
+            current = self.get_window_rect_for_hwnd(hwnd)
+            if not current:
+                return False
+            if self.is_foreground(current):
+                return True
+            attempt += 1
+            activated = _force_foreground(hwnd)
+            if not activated and attempt >= 2:
+                activated = _switch_to_window(hwnd)
+            if activated and self.is_foreground(current):
+                # Browser callbacks may steal focus immediately after activation.
+                time.sleep(0.15)
+                if self.is_foreground(current):
+                    return True
+            time.sleep(0.2)
+        return False
+
     def is_foreground(self, rect: dict) -> bool:
         hwnd = rect.get("id")
         if not hwnd:
@@ -223,6 +307,93 @@ class WindowsAdapter(OSAdapter):
                 "w": win.width,
                 "h": win.height,
                 "id": getattr(win, "_hWnd", None),
+            }
+        except Exception:
+            return None
+
+    def get_capam_main_rect(self) -> dict | None:
+        """Choose unowned exact-title CAPAM window; dialogs have an owner HWND."""
+        try:
+            import ctypes
+            import pygetwindow as gw
+            windows = [
+                window for window in gw.getWindowsWithTitle("Symantec Privileged Access Manager")
+                if window.title == "Symantec Privileged Access Manager"
+                and window.width > 0 and window.height > 0
+            ]
+            if not windows:
+                return None
+            unowned = [
+                window for window in windows
+                if not ctypes.windll.user32.GetWindow(getattr(window, "_hWnd", 0), 4)  # GW_OWNER
+            ]
+            if not unowned:
+                return None
+            window = max(unowned, key=lambda item: item.width * item.height)
+            return {
+                "x": window.left,
+                "y": window.top,
+                "w": window.width,
+                "h": window.height,
+                "id": getattr(window, "_hWnd", None),
+            }
+        except Exception:
+            return None
+
+    def get_capam_dialog_rect(self) -> dict | None:
+        """Choose owned exact-title CAPAM authentication dialog."""
+        try:
+            import ctypes
+            import pygetwindow as gw
+            windows = [
+                window for window in gw.getWindowsWithTitle("Symantec Privileged Access Manager")
+                if window.title == "Symantec Privileged Access Manager"
+                and window.width > 0 and window.height > 0
+            ]
+            if not windows:
+                return None
+            if len(windows) == 1:
+                window = windows[0]
+                return {
+                    "x": window.left,
+                    "y": window.top,
+                    "w": window.width,
+                    "h": window.height,
+                    "id": getattr(window, "_hWnd", None),
+                }
+            owned = [
+                window for window in windows
+                if ctypes.windll.user32.GetWindow(getattr(window, "_hWnd", 0), 4)  # GW_OWNER
+            ]
+            if not owned:
+                return None
+            window = min(owned, key=lambda item: item.width * item.height)
+            return {
+                "x": window.left,
+                "y": window.top,
+                "w": window.width,
+                "h": window.height,
+                "id": getattr(window, "_hWnd", None),
+            }
+        except Exception:
+            return None
+
+    def get_window_rect_for_hwnd(self, hwnd) -> dict | None:
+        if not hwnd:
+            return None
+        try:
+            import ctypes
+            rect = (ctypes.c_long * 4)()
+            if not ctypes.windll.user32.IsWindow(hwnd):
+                return None
+            if not ctypes.windll.user32.GetWindowRect(hwnd, rect):
+                return None
+            return {
+                "x": rect[0],
+                "y": rect[1],
+                "w": rect[2] - rect[0],
+                "h": rect[3] - rect[1],
+                "id": hwnd,
             }
         except Exception:
             return None

@@ -10,6 +10,29 @@ from adapters.base import OSAdapter
 
 class LinuxAdapter(OSAdapter):
 
+    def get_capam_main_rect(self) -> dict | None:
+        return self.get_window_rect("Symantec Privileged Access Manager", exact=True)
+
+    def get_capam_dialog_rect(self) -> dict | None:
+        return self.get_window_rect("Symantec Privileged Access Manager", exact=True)
+
+    def get_window_rect_for_hwnd(self, hwnd) -> dict | None:
+        try:
+            out = subprocess.check_output(["wmctrl", "-l", "-G"]).decode("utf-8")
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) >= 6 and parts[0].lower() == str(hwnd).lower():
+                    return {
+                        "x": int(parts[2]),
+                        "y": int(parts[3]),
+                        "w": int(parts[4]),
+                        "h": int(parts[5]),
+                        "id": parts[0],
+                    }
+        except Exception:
+            pass
+        return None
+
     def focus_window(self, title_keyword: str, exact: bool = False) -> bool:
         try:
             if exact:
@@ -25,6 +48,17 @@ class LinuxAdapter(OSAdapter):
         window_id = rect.get("id")
         if not window_id:
             return False
+
+    def wait_focus_rect(self, rect: dict, timeout: float = 5.0) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.focus_rect(rect):
+                return True
+            time.sleep(0.2)
+        return False
+
+    def suppress_browser_foreground(self) -> bool:
+        return False
         try:
             subprocess.run(["wmctrl", "-i", "-a", str(window_id)], check=False)
             time.sleep(0.1)
