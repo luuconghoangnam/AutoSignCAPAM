@@ -376,18 +376,22 @@ class CAPAMHandler:
             self._log(f"[Login] Đã nhập tài khoản CAPAM: {username}")
 
             # Password (sử dụng phím TAB để chuyển ô, tránh lỗi OpenCV không nhận diện được ô có chứa sẵn dấu chấm đen)
-            time.sleep(0.2)
+            # CAPAM runs on Java Swing; let its event queue finish processing
+            # the username paste before changing focus.
+            time.sleep(0.45)
             if not self.adapter.is_foreground(rect):
                 return False
-            pyautogui.press("tab")
-            time.sleep(0.1)
+            pyautogui.keyDown("tab")
+            time.sleep(0.12)
+            pyautogui.keyUp("tab")
+            time.sleep(0.5)
             if not self.adapter.is_foreground(rect):
                 self._log("[Login] Foreground đổi sau Tab; dừng nhập Password.")
                 return False
             pyautogui.hotkey("ctrl", "a")
-            time.sleep(0.1)
+            time.sleep(0.2)
             pyautogui.press("backspace")
-            time.sleep(0.1)
+            time.sleep(0.2)
             if not write_text_safely(password, lambda: self.adapter.is_foreground(rect)):
                 return False
             self._log("[Login] Đã nhập mật khẩu CAPAM.")
