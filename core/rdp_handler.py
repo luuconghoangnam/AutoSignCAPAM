@@ -94,6 +94,7 @@ class RDPHandler:
         previous_rect = None
         stable_count = 0
         next_detail_log = started
+        focused_once = False
         while time.monotonic() < deadline:
             if self._cancelled():
                 return False
@@ -113,6 +114,17 @@ class RDPHandler:
             if expected_rect and rect.get("id") != expected_rect.get("id"):
                 self._log("Instance danh sách thiết bị CAPAM đã thay đổi; hủy click RDP.")
                 return False
+
+            # Java HWND capture can be blank while occluded. Activate exact device-list
+            # window before the first capture, not after successful recognition.
+            if not focused_once or not self.adapter.is_foreground(rect):
+                if not self.adapter.wait_focus_rect(rect, timeout=5.0):
+                    self._log("Không thể đưa danh sách thiết bị CAPAM lên foreground để nhận diện.")
+                    self._wait_next_poll(poll_started, deadline)
+                    continue
+                self.adapter.refresh_window(rect)
+                time.sleep(0.25)
+                focused_once = True
             try:
                 self.adapter.take_screenshot(rect, self._screenshot_tmp)
             except Exception as e:
@@ -128,6 +140,13 @@ class RDPHandler:
 
             if scene is None:
                 self._log("Không thể đọc ảnh cửa sổ CAPAM vừa chụp.")
+                self._wait_next_poll(poll_started, deadline)
+                continue
+
+            if scene.std() < 3.0:
+                self._log("Ảnh CAPAM chưa render hoặc đang bị che; yêu cầu vẽ lại...")
+                self.adapter.refresh_window(rect)
+                focused_once = False
                 self._wait_next_poll(poll_started, deadline)
                 continue
 
