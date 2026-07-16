@@ -66,6 +66,9 @@ echo [4/5] Dong goi ung dung...
     --hidden-import "vision" ^
     --hidden-import "vision.field_detector" ^
     --hidden-import "vision.template_matcher" ^
+    --hidden-import "automation.java_access_bridge" ^
+    --hidden-import "JABWrapper.jab_wrapper" ^
+    --hidden-import "JABWrapper.context_tree" ^
     --hidden-import "ui" ^
     --hidden-import "ui.main_window" ^
     --exclude-module PyQt5.QtWebEngine ^

@@ -92,3 +92,7 @@ class OSAdapter:
     def get_gp_log_path(self) -> str:
         """Trả về đường dẫn tuyệt đối đến file log của GlobalProtect."""
         return ""
+
+    def get_rdp_windows(self) -> dict[int, str]:
+        """Return visible mstsc window handles and titles in current session."""
+        return {}

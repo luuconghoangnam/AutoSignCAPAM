@@ -11,14 +11,12 @@ import pyautogui
 
 from adapters.base import OSAdapter
 from vision.template_matcher import find_device_rdp_button
-from vision.field_detector import detect_input_fields
 from config import write_text_safely
 
 
 WIN_SEC_TITLE = "Symantec Privileged Access Manager"
 WIN_SEC_TITLES = (WIN_SEC_TITLE, "Windows Security")
 _POLL_INTERVAL = 0.5
-_MIN_FIELD_WIDTH_RATIO = 0.25
 
 
 class RDPHandler:
@@ -30,7 +28,6 @@ class RDPHandler:
         self._cancelled = cancel_fn or (lambda: False)
         run_id = f"{os.getpid()}_{uuid.uuid4().hex}"
         self._screenshot_tmp = os.path.join(tempfile.gettempdir(), f"capam_window_{run_id}.png")
-        self._win_sec_tmp = os.path.join(tempfile.gettempdir(), f"win_sec_{run_id}.png")
 
     @staticmethod
     def _wait_next_poll(poll_started: float, deadline: float) -> None:
@@ -248,10 +245,9 @@ class RDPHandler:
         Returns: True nếu hoàn tất.
         """
         self._log("Đang chờ bảng Windows Security xuất hiện...")
+        existing_rdp_windows = self.adapter.get_rdp_windows()
         rect = None
         window_title = None
-        screenshot_tmp = self._win_sec_tmp
-
         started = time.monotonic()
         deadline = started + 30
         while time.monotonic() < deadline:
@@ -277,107 +273,70 @@ class RDPHandler:
             self._log("Không tìm thấy bảng xác thực RDP CAPAM trong 30 giây.")
             return False
 
-        # Phát hiện ô nhập liệu trong bảng xác thực RDP CAPAM
-        fields = []
-        stable_count = 0
-        previous_fields = []
-        previous_rect = None
-        started = time.monotonic()
-        deadline = started + 15
+        # Credential provider does not expose child controls through UIA/JAB.
+        # The real dialog starts with Username focused; one Tab reaches Password.
+        if not self.adapter.wait_focus_rect(rect, timeout=5.0):
+            self._log("Không thể đưa overlay xác thực lên foreground trước khi nhập.")
+            return False
+        current_rect = self.adapter.get_window_rect_for_hwnd(rect.get("id"))
+        if not self._same_rect(rect, current_rect or {}):
+            self._log("Bảng xác thực đã di chuyển hoặc thay đổi; dừng trước khi nhập.")
+            return False
+
+        pyautogui.hotkey("ctrl", "a")
+        if not write_text_safely(username, lambda: self.adapter.is_foreground(rect)):
+            return False
+        self._log(f"Đã nhập Username Windows Security: {username}")
+
+        if not self.adapter.is_foreground(rect):
+            return False
+        pyautogui.press("tab")
+        time.sleep(0.15)
+        if not self.adapter.is_foreground(rect):
+            self._log("Foreground đổi sau Tab Windows Security; dừng nhập Password.")
+            return False
+        pyautogui.hotkey("ctrl", "a")
+        if not write_text_safely(password, lambda: self.adapter.is_foreground(rect)):
+            return False
+        self._log("Đã nhập Password Windows Security.")
+
+        if not self.adapter.is_foreground(rect):
+            self._log("Foreground đổi; không gửi Enter Windows Security.")
+            return False
+        submitted_hwnd = rect.get("id")
+        pyautogui.press("enter")
+        self._log("Đã gửi Windows Security; đang xác minh kết quả...")
+
+        deadline = time.monotonic() + 15
+        closed_at = None
         while time.monotonic() < deadline:
             if self._cancelled():
                 return False
-            poll_started = time.monotonic()
-            try:
-                current_rect = self.adapter.get_window_rect_for_hwnd(rect.get("id"))
-                if not current_rect:
-                    raise RuntimeError("Cửa sổ xác thực đã đóng.")
-                rect = current_rect
-                self.adapter.take_screenshot(rect, screenshot_tmp)
-            except Exception:
-                fields = []
-                stable_count = 0
-                previous_fields = []
-                previous_rect = None
-                self._wait_next_poll(poll_started, deadline)
-                continue
-
-            fields = detect_input_fields(screenshot_tmp, profile="windows_security")
-            fields = [field for field in fields if field[2] >= rect["w"] * _MIN_FIELD_WIDTH_RATIO]
-            try:
-                os.remove(screenshot_tmp)
-            except Exception:
-                pass
-            if len(fields) >= 1:
-                unchanged = self._same_rect(previous_rect, rect) and self._same_fields(previous_fields, fields)
-                stable_count = stable_count + 1 if unchanged else 1
-                previous_fields = fields
-                previous_rect = rect.copy()
-            else:
-                stable_count = 0
-                previous_fields = []
-                previous_rect = None
-            if stable_count >= 2:
-                break
-            elapsed = time.monotonic() - started
-            self._log(f"Đang chờ ô nhập liệu của bảng xác thực RDP CAPAM... ({elapsed:.1f}/15s)")
-            self._wait_next_poll(poll_started, deadline)
-            
-        self._log(f"Bảng xác thực RDP CAPAM: Phát hiện thấy {len(fields)} ô nhập liệu.")
-
-        if len(fields) < 1 or stable_count < 2:
-            self._log("Không tìm thấy ô nhập liệu nào trong bảng xác thực RDP CAPAM.")
-            return False
-
-        for attempt in range(3):
-            if attempt > 0:
-                self._log(f"Thử lại điền Windows Security lần {attempt + 1}...")
-
-            if not self.adapter.wait_focus_rect(rect, timeout=5.0):
-                self._log("Không thể đưa overlay xác thực lên foreground trước khi nhập.")
-                time.sleep(0.5)
-                continue
-            current_rect = self.adapter.get_window_rect_for_hwnd(rect.get("id"))
-            if not self._same_rect(rect, current_rect or {}):
-                self._log("Bảng xác thực đã di chuyển hoặc thay đổi; không nhập thông tin vào tọa độ cũ.")
-                return False
-
-            x0, y0, w0, h0 = fields[0]
-
-            # Username
-            pyautogui.click(rect["x"] + x0 + w0 // 2, rect["y"] + y0 + h0 // 2)
-            time.sleep(0.15)
-            if not self.adapter.is_foreground(rect):
-                self._log("Foreground đổi sau click Username Windows Security; dừng nhập.")
-                return False
-            pyautogui.hotkey("ctrl", "a")
-            time.sleep(0.1)
-            if not write_text_safely(username, lambda: self.adapter.is_foreground(rect)):
-                return False
-            self._log(f"Đã nhập Username Windows Security: {username}")
-
-            # Password
+            if not self.adapter.get_window_rect_for_hwnd(submitted_hwnd):
+                closed_at = closed_at or time.monotonic()
+                # Reject an immediate replacement credential dialog (auth retry).
+                replacement = None
+                for candidate_title in WIN_SEC_TITLES:
+                    replacement = (
+                        self.adapter.get_capam_dialog_rect()
+                        if candidate_title == WIN_SEC_TITLE
+                        else self.adapter.get_window_rect(candidate_title, exact=True)
+                    )
+                    if replacement:
+                        break
+                current_rdp_windows = self.adapter.get_rdp_windows()
+                new_rdp_windows = set(current_rdp_windows) - set(existing_rdp_windows)
+                changed_rdp_windows = {
+                    hwnd for hwnd, title in current_rdp_windows.items()
+                    if hwnd in existing_rdp_windows and title != existing_rdp_windows[hwnd]
+                }
+                if not replacement and (new_rdp_windows or changed_rdp_windows):
+                    self._log("Windows Security đã đóng và cửa sổ RDP đã chuyển trạng thái.")
+                    return True
+                if replacement and replacement.get("id") != submitted_hwnd:
+                    self._log("Windows Security xuất hiện lại; thông tin xác thực có thể bị từ chối.")
+                    return False
             time.sleep(0.2)
-            if not self.adapter.is_foreground(rect):
-                return False
-            pyautogui.press("tab")
-            time.sleep(0.15)
-            if not self.adapter.is_foreground(rect):
-                self._log("Foreground đổi sau Tab Windows Security; dừng nhập Password.")
-                return False
-            pyautogui.hotkey("ctrl", "a")
-            time.sleep(0.1)
-            if not write_text_safely(password, lambda: self.adapter.is_foreground(rect)):
-                return False
-            self._log("Đã nhập Password Windows Security.")
 
-            time.sleep(0.3)
-            if not self.adapter.is_foreground(rect):
-                self._log("Foreground đổi; không gửi Enter Windows Security.")
-                return False
-            pyautogui.press("enter")
-            self._log("Đã nhấn Login Windows Security — kết nối RDP đang thiết lập!")
-            return True
-
-        self._log("Thất bại sau 3 lần thử nhập Windows Security.")
+        self._log("Không thấy cửa sổ RDP mới sau 15 giây; không xác nhận kết nối thành công.")
         return False

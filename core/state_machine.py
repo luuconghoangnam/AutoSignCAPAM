@@ -368,3 +368,5 @@ class AutomationWorker(QThread):
             self._log(f"[LỖI NGOẠI LỆ] {e}")
             self.finished_signal.emit(False)
             return
+        finally:
+            self._capam.close()

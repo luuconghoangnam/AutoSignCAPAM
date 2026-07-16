@@ -528,3 +528,40 @@ class WindowsAdapter(OSAdapter):
         return os.path.expanduser(
             r"~\AppData\Local\Palo Alto Networks\GlobalProtect\PanGPA.log"
         )
+
+    def get_rdp_windows(self) -> dict[int, str]:
+        """Return visible top-level HWNDs and titles owned by mstsc.exe."""
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            result = {}
+            callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+            def visit(hwnd, _):
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+                pid = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                process = kernel32.OpenProcess(0x1000, False, pid.value)
+                if not process:
+                    return True
+                try:
+                    buffer = ctypes.create_unicode_buffer(1024)
+                    size = wintypes.DWORD(len(buffer))
+                    if kernel32.QueryFullProcessImageNameW(process, 0, buffer, ctypes.byref(size)):
+                        if os.path.basename(buffer.value).lower() == "mstsc.exe":
+                            length = user32.GetWindowTextLengthW(hwnd) + 1
+                            title = ctypes.create_unicode_buffer(length)
+                            user32.GetWindowTextW(hwnd, title, length)
+                            result[int(hwnd)] = title.value
+                finally:
+                    kernel32.CloseHandle(process)
+                return True
+
+            user32.EnumWindows(callback_type(visit), 0)
+            return result
+        except Exception:
+            return {}

@@ -21,6 +21,7 @@ import cv2
 from adapters.base import OSAdapter
 from vision.field_detector import detect_input_fields
 from config import write_text_safely
+from automation.java_access_bridge import CAPAMJAB, JABUnavailable
 
 
 CAPAM_WINDOW_TITLE = "Symantec Privileged Access Manager"
@@ -43,6 +44,51 @@ class CAPAMHandler:
         self._screenshot_tmp = os.path.join(
             tempfile.gettempdir(), f"capam_crop_{os.getpid()}_{uuid.uuid4().hex}.png"
         )
+        self._jab = None
+        self._jab_failed = False
+        self._jab_attempts = 0
+        self._jab_retry_at = 0.0
+
+    def _get_jab(self, rect: dict | None = None):
+        """Attach JAB to CAPAM when bundled bridge and tree are available."""
+        if self._jab:
+            if rect and self._jab.hwnd != rect.get("id"):
+                self._jab.close()
+                self._jab = None
+            else:
+                return self._jab
+        if self._jab_failed:
+            return None
+        if time.monotonic() < self._jab_retry_at:
+            return None
+        find_exe = getattr(self.adapter, "find_capam_exe", None)
+        exe = find_exe() if find_exe else None
+        bridge = CAPAMJAB.find_bridge(exe) if exe else None
+        if not bridge:
+            self._jab_failed = True
+            return None
+        try:
+            self._jab_attempts += 1
+            jab = CAPAMJAB(bridge)
+            target_rect = rect or self.adapter.get_capam_main_rect()
+            if not target_rect or not target_rect.get("id"):
+                raise JABUnavailable("CAPAM HWND unavailable")
+            jab.attach(hwnd=target_rect["id"])
+            self._jab = jab
+            return jab
+        except JABUnavailable as exc:
+            if "jab" in locals():
+                jab.close()
+            self._jab_retry_at = time.monotonic() + 2.0
+            if self._jab_attempts >= 3:
+                self._jab_failed = True
+                self._log(f"[CAPAM] JAB không khả dụng sau 3 lần, dùng vision fallback: {exc}")
+            return None
+
+    def close(self) -> None:
+        if self._jab:
+            self._jab.close()
+            self._jab = None
 
     # ------------------------------------------------------------------
     # Khởi động
@@ -81,7 +127,16 @@ class CAPAMHandler:
     # ------------------------------------------------------------------
 
     def _detect_fields(self, rect: dict) -> list:
-        """Chụp ảnh cửa sổ và phát hiện ô nhập liệu bằng OpenCV."""
+        """Detect CAPAM controls semantically, then use OpenCV fallback."""
+        jab = self._get_jab(rect)
+        if jab:
+            if jab.has("combo box", "Address"):
+                return [jab.bounds("combo box", "Address", rect)]
+            if jab.has("text", "Username") and jab.has("password text", "Password"):
+                return [
+                    jab.bounds("text", "Username", rect),
+                    jab.bounds("password text", "Password", rect),
+                ]
         try:
             self.adapter.take_screenshot(rect, self._screenshot_tmp)
         except Exception:
@@ -99,6 +154,9 @@ class CAPAMHandler:
 
     def _detect_address_field(self, rect: dict) -> list:
         """Nhận diện ô Address; fallback theo ROI cố định của layout CAPAM."""
+        jab = self._get_jab(rect)
+        if jab and jab.has("combo box", "Address"):
+            return [jab.bounds("combo box", "Address", rect)]
         fields = self._likely_text_fields(rect, self._detect_fields(rect))
         if fields:
             return fields
@@ -186,7 +244,7 @@ class CAPAMHandler:
             if rect:
                 ratio = rect["h"] / rect["w"]
                 # Màn hình Address dẹt hơn (ratio ~0.45). Chỉ quét khi tỷ lệ nhỏ hơn 0.55
-                if ratio < 0.55:
+                if ratio < 0.55 or (self._get_jab(rect) and self._get_jab(rect).has("combo box", "Address")):
                     fields = self._detect_address_field(rect)
                     if len(fields) >= 1:
                         unchanged = self._same_rect(previous_rect, rect) and self._same_fields(previous_fields, fields)
@@ -222,6 +280,21 @@ class CAPAMHandler:
             self._log("[Address] Không tìm thấy ô Address để nhập IP.")
             return False
 
+        jab = self._get_jab(rect)
+        if jab and jab.has("combo box", "Address"):
+            try:
+                jab.set_combo_text("Address", self.capam_ip)
+                jab.click("Connect")
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    if jab.has("text", "Username") or jab.has("password text", "Password"):
+                        self._log("[Address] Đã chuyển sang màn hình Login bằng JAB.")
+                        return True
+                    time.sleep(_POLL_INTERVAL)
+                raise JABUnavailable("Login controls did not appear after Connect")
+            except Exception as exc:
+                self._log(f"[Address] JAB lỗi sau khi bắt đầu thao tác; không fallback để tránh nhập lặp: {exc}")
+                return False
         if not self.adapter.is_foreground(rect):
             self._log("[Address] Bị mất Focus. Đang ép lôi cửa sổ CAPAM lên trên cùng...")
             self.adapter.focus_rect(rect)
@@ -301,7 +374,7 @@ class CAPAMHandler:
             if rect:
                 ratio = rect["h"] / rect["w"]
                 # Màn hình Login cao hơn (ratio ~0.65). Chỉ chấp nhận khi tỷ lệ >= 0.55
-                if ratio >= 0.55:
+                if ratio >= 0.55 or (self._get_jab(rect) and self._get_jab(rect).has("text", "Username")):
                     raw_fields = self._detect_fields(rect)
                     min_width = max(_LOGIN_FIELD_MIN_WIDTH, rect["w"] * _LOGIN_FIELD_WIDTH_RATIO)
                     fields = [field for field in raw_fields if field[2] >= min_width]
@@ -344,6 +417,24 @@ class CAPAMHandler:
         if len(fields) < 1:
             self._log("[Login] Không tìm thấy ô nhập liệu nào để điền thông tin CAPAM.")
             return False
+
+        jab = self._get_jab(rect)
+        if jab and jab.has("text", "Username") and jab.has("password text", "Password"):
+            try:
+                jab.set_text("text", "Username", username)
+                jab.set_text("password text", "Password", password)
+                jab.click("Login")
+                deadline = time.monotonic() + 20
+                while time.monotonic() < deadline:
+                    if self.adapter.get_window_rect_for_hwnd(rect.get("id")) is None:
+                        return True
+                    if not jab.has("text", "Username") and not jab.has("password text", "Password"):
+                        return True
+                    time.sleep(_POLL_INTERVAL)
+                raise JABUnavailable("Device list or next CAPAM state did not appear after Login")
+            except Exception as exc:
+                self._log(f"[Login] JAB lỗi sau khi bắt đầu thao tác; không fallback để tránh nhập lặp: {exc}")
+                return False
 
         for attempt in range(3):
             if attempt > 0:
