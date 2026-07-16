@@ -1,12 +1,50 @@
 @echo off
-echo Dang cai dat cac thu vien can thiet...
-pip install -r requirements.txt
+setlocal
+cd /d "%~dp0"
 
-echo Dang don dep cac ban build cu...
-rmdir /s /q build dist
-del /q *.spec
+set "VENV_PYTHON=%CD%\.venv\Scripts\python.exe"
+set "APP_NAME=CAPAM_AutoSign_Windows"
 
-python -m PyInstaller --noconsole --onefile ^
+echo [1/5] Kiem tra Python 3...
+if not exist "%VENV_PYTHON%" (
+    where py >nul 2>nul
+    if not errorlevel 1 (
+        py -3 -m venv ".venv"
+    ) else (
+        where python >nul 2>nul
+        if errorlevel 1 (
+            echo [LOI] Khong tim thay Python 3. Cai Python 3.11+ va bat tuy chon Add Python to PATH.
+            exit /b 1
+        )
+        python -m venv ".venv"
+    )
+    if errorlevel 1 (
+        echo [LOI] Khong tao duoc virtual environment .venv.
+        exit /b 1
+    )
+)
+
+echo [2/5] Cai dat dependencies trong .venv...
+"%VENV_PYTHON%" -m pip install --upgrade pip
+if errorlevel 1 exit /b 1
+"%VENV_PYTHON%" -m pip install -r "requirements.txt"
+if errorlevel 1 exit /b 1
+
+echo [3/5] Don dep build cu...
+if exist "build" rmdir /s /q "build"
+if exist "build" (
+    echo [LOI] Khong xoa duoc thu muc build. Dong tien trinh dang su dung file va thu lai.
+    exit /b 1
+)
+if exist "dist" rmdir /s /q "dist"
+if exist "dist" (
+    echo [LOI] Khong xoa duoc thu muc dist. Dong EXE dang chay va thu lai.
+    exit /b 1
+)
+del /q "*.spec" >nul 2>nul
+
+echo [4/5] Dong goi ung dung...
+"%VENV_PYTHON%" -m PyInstaller --clean --noconfirm --noconsole --onefile ^
     --add-data "template_rdp.png;." ^
     --add-data "template_200.png;." ^
     --add-data "template_12.png;." ^
@@ -48,12 +86,21 @@ python -m PyInstaller --noconsole --onefile ^
     --exclude-module matplotlib ^
     --exclude-module IPython ^
     --exclude-module jinja2 ^
-    --name "CAPAM_AutoSign_Windows" ^
+    --name "%APP_NAME%" ^
     main.py
+if errorlevel 1 (
+    echo [LOI] PyInstaller build that bai.
+    exit /b 1
+)
 
+echo [5/5] Don dep file trung gian...
+if exist "build" rmdir /s /q "build"
+del /q "*.spec" >nul 2>nul
 
-echo Dang don dep cac tep tin tam (build, spec)...
-rmdir /s /q build
-del /q *.spec
+if not exist "dist\%APP_NAME%.exe" (
+    echo [LOI] Khong tim thay EXE sau build.
+    exit /b 1
+)
 
-echo HOAN TAT! File chay doc lap (.exe) nam trong thu muc: dist\CAPAM_AutoSign_Windows.exe
+for %%F in ("dist\%APP_NAME%.exe") do echo [OK] %%~fF - %%~zF bytes
+exit /b 0
