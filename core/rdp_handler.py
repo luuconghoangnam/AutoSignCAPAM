@@ -211,7 +211,7 @@ class RDPHandler:
                     point,
                     scene.shape[1],
                     scene.shape[0],
-                    rect,
+                    snapshot.rect,
                 )
                 self._log(f"Đang click nút RDP tại ({click_x}, {click_y})...")
                 if not self.adapter.is_foreground(rect):
@@ -236,12 +236,20 @@ class RDPHandler:
             self._wait_next_poll(poll_started, deadline)
         return False
 
-    def fill_windows_security(self, username: str, password: str) -> bool:
+    def fill_windows_security(self, username: str, password: str, device_choice: str) -> bool:
         """Chờ và điền thông tin đăng nhập vào bảng Windows Security.
         Returns: True nếu hoàn tất.
         """
         self._log("Đang chờ bảng Windows Security xuất hiện...")
         existing_rdp_windows = self.adapter.get_rdp_windows()
+        expected_session_title = {
+            "200": "RDP-211.200",
+            "12": "Terminal-211.12",
+        }.get(device_choice)
+        existing_session = (
+            self.adapter.get_window_rect(expected_session_title, exact=True)
+            if expected_session_title else None
+        )
         rect = None
         window_title = None
         started = time.monotonic()
@@ -326,6 +334,25 @@ class RDPHandler:
                     hwnd for hwnd, title in current_rdp_windows.items()
                     if hwnd in existing_rdp_windows and title != existing_rdp_windows[hwnd]
                 }
+                current_session = (
+                    self.adapter.get_window_rect(expected_session_title, exact=True)
+                    if expected_session_title else None
+                )
+                capam_session_ready = bool(
+                    current_session
+                    and self.adapter.window_belongs_to_process(
+                        current_session.get("id"), "CAPAMClient.exe"
+                    )
+                    and (
+                        not existing_session
+                        or current_session.get("id") != existing_session.get("id")
+                    )
+                )
+                if not replacement and capam_session_ready:
+                    self._log(
+                        f"Windows Security đã đóng và phiên '{expected_session_title}' đã xuất hiện."
+                    )
+                    return True
                 if not replacement and (new_rdp_windows or changed_rdp_windows):
                     self._log("Windows Security đã đóng và cửa sổ RDP đã chuyển trạng thái.")
                     return True
@@ -334,5 +361,8 @@ class RDPHandler:
                     return False
             time.sleep(0.2)
 
-        self._log("Không thấy cửa sổ RDP mới sau 15 giây; không xác nhận kết nối thành công.")
+        self._log(
+            f"Không thấy phiên '{expected_session_title}' hoặc cửa sổ RDP mới sau 15 giây; "
+            "không xác nhận kết nối thành công."
+        )
         return False

@@ -1958,7 +1958,7 @@ Khong dao thu tu vi moi buoc sau phu thuoc evidence cua buoc truoc.
 
 | Gate | Trang thai | Evidence hien co | Thieu | Action tiep theo |
 |---|---|---|---|---|
-| G0 Nghiep vu | BLOCKED | FSM va docs cu | CAPAM password/OTP chua chot | Tao ADR credential flow |
+| G0 Nghiep vu | PASSED | `docs/adr/0001-credential-flow.md` | Khong | Chay G1 baseline |
 | G1 Baseline | BLOCKED | Bao cao Win10 pass/Win11 fail bang loi noi | 20-run/state metrics | Chay baseline collector |
 | G2 Dataset | BLOCKED | Anh calibration cu | Manifest day du + negatives | Thu artifact hai may |
 | G3 Geometry | IMPLEMENTED, NOT VERIFIED | Unit tests + normalized capture commit `7144a85` | Windows physical/mixed-DPI test | Chay dry-run mapping |

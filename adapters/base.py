@@ -96,3 +96,7 @@ class OSAdapter:
     def get_rdp_windows(self) -> dict[int, str]:
         """Return visible mstsc window handles and titles in current session."""
         return {}
+
+    def window_belongs_to_process(self, hwnd: int, process_name: str) -> bool:
+        """Return whether exact HWND is currently owned by expected process."""
+        return False

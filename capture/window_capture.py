@@ -17,7 +17,11 @@ class FrameCapture:
         if image is None:
             return None
         image_h, image_w = image.shape[:2]
-        capture_rect = current.copy()
+        get_capture_rect = getattr(self.adapter, "get_capture_rect_for_hwnd", None)
+        capture_rect = get_capture_rect(hwnd) if get_capture_rect and hwnd else None
+        capture_rect = capture_rect or current.copy()
+        if capture_rect.get("id") != current.get("id"):
+            return None
         capture_rect["w"] = image_w
         capture_rect["h"] = image_h
         return FrameSnapshot.from_image(image, capture_rect)

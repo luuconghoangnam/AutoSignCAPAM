@@ -3,7 +3,9 @@ core/state_machine.py — FSM điều phối toàn bộ luồng tự động hó
 
 Mỗi state tách riêng và trả về state tiếp theo.
 """
+import os
 import time
+import uuid
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
@@ -11,6 +13,7 @@ from adapters import get_os_adapter
 from core.gp_handler import GPHandler, STATE_PORTAL, STATE_CREDENTIALS, STATE_CONNECTED, STATE_AUTH_FAILED, STATE_UNKNOWN
 from core.capam_handler import CAPAMHandler
 from core.rdp_handler import RDPHandler
+from diagnostics.timeline import TimelineWriter
 
 
 class AutomationWorker(QThread):
@@ -44,9 +47,21 @@ class AutomationWorker(QThread):
         self._capam_launched_early = False
         self._gp_submitted_rect = None
         self._device_list_rect = None
+        timeline_path = os.environ.get("AUTOMATION_TIMELINE_PATH")
+        self._timeline = (
+            TimelineWriter(
+                timeline_path,
+                source="fsm",
+                session_id=os.environ.get("AUTOMATION_SESSION_ID", uuid.uuid4().hex),
+                secrets=(username, password_prefix, otp, password_prefix + otp),
+            )
+            if timeline_path else None
+        )
 
     def _log(self, msg: str) -> None:
         self.log_signal.emit(f"[*] {msg}")
+        if self._timeline:
+            self._timeline.emit("log", message=msg)
 
     # ------------------------------------------------------------------
     # FSM States
@@ -281,7 +296,9 @@ class AutomationWorker(QThread):
 
     def _state_windows_security(self) -> str:
         """State 6: Điền thông tin vào bảng Windows Security."""
-        if self._rdp.fill_windows_security(self.username, self.password_prefix):
+        if self._rdp.fill_windows_security(
+            self.username, self.password_prefix, self.server_choice
+        ):
             return "DONE"
         self._log("Không thể hoàn tất bảng xác thực RDP CAPAM.")
         return "ERROR"
@@ -297,8 +314,18 @@ class AutomationWorker(QThread):
         try:
             state = "RESET_CAPAM"
             gp_attempts = 0
+            if self._timeline:
+                self._timeline.emit(
+                    "run_started",
+                    state=state,
+                    server_choice=self.server_choice,
+                    capam_ip=self.capam_ip,
+                )
 
             while True:
+                entered_state = state
+                if self._timeline:
+                    self._timeline.emit("state_enter", state=entered_state)
                 if self.isInterruptionRequested():
                     self._log("Đã hủy kịch bản tự động hóa.")
                     self.finished_signal.emit(False)
@@ -366,9 +393,21 @@ class AutomationWorker(QThread):
                     self._log(f"[LỖI] Trạng thái không xác định: {state}")
                     self.finished_signal.emit(False)
                     return
+                if self._timeline and state != entered_state:
+                    self._timeline.emit("state_transition", previous=entered_state, current=state)
         except Exception as e:
             self._log(f"[LỖI NGOẠI LỆ] {e}")
+            if self._timeline:
+                self._timeline.emit("run_exception", error_type=type(e).__name__, message=str(e))
             self.finished_signal.emit(False)
             return
         finally:
             self._capam.close()
+            if self._timeline:
+                terminal_state = locals().get("state", "NOT_STARTED")
+                self._timeline.emit(
+                    "run_finished",
+                    terminal_state=terminal_state,
+                    success=terminal_state == "DONE",
+                    interruption_requested=self.isInterruptionRequested(),
+                )

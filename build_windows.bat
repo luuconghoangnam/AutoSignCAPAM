@@ -71,6 +71,8 @@ echo [4/5] Dong goi ung dung...
      --hidden-import "capture.window_capture" ^
      --hidden-import "recognition" ^
      --hidden-import "recognition.geometry" ^
+     --hidden-import "diagnostics" ^
+     --hidden-import "diagnostics.timeline" ^
      --hidden-import "automation.java_access_bridge" ^
     --hidden-import "JABWrapper.jab_wrapper" ^
     --hidden-import "JABWrapper.context_tree" ^

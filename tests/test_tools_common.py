@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tools.collect_windows import EXPECTED_STATE_BY_STAGE
 from tools.common import capture_allowed, create_run_dir
 
 
@@ -22,6 +23,10 @@ class ToolsCommonTests(unittest.TestCase):
             self.assertNotEqual(first, second)
             self.assertTrue(Path(first).is_dir())
             self.assertTrue(Path(second).is_dir())
+
+    def test_capture_stages_map_to_fsm_states(self):
+        self.assertEqual(EXPECTED_STATE_BY_STAGE["gp-portal"], "GP_DETECT")
+        self.assertEqual(EXPECTED_STATE_BY_STAGE["device-list"], "RDP_CLICK")
 
 
 if __name__ == "__main__":

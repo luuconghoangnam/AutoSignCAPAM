@@ -15,6 +15,7 @@ import uuid
 import pyautogui
 
 from adapters.base import OSAdapter
+from capture.window_capture import FrameCapture
 from vision.field_detector import detect_input_fields
 from config import GP_PORTAL_URL, write_text_safely
 
@@ -36,6 +37,7 @@ class GPHandler:
         self._log = log_fn or (lambda msg: None)
         self._cancelled = cancel_fn or (lambda: False)
         self._log_offset: int = 0
+        self._capture = FrameCapture(adapter)
         self._screenshot_tmp = os.path.join(
             tempfile.gettempdir(), f"gp_crop_{os.getpid()}_{uuid.uuid4().hex}.png"
         )
@@ -161,12 +163,13 @@ class GPHandler:
 
     def detect_fields(self, rect: dict) -> list:
         """Chụp cửa sổ GP và phát hiện các ô nhập liệu bằng OpenCV."""
-        current_rect = self.adapter.get_window_rect_for_hwnd(rect.get("id"))
-        if not current_rect:
+        snapshot = self._capture.capture(rect)
+        if not snapshot or snapshot.is_blank:
             return []
-        rect = current_rect
         try:
-            self.adapter.take_screenshot(rect, self._screenshot_tmp)
+            import cv2
+
+            cv2.imwrite(self._screenshot_tmp, snapshot.image)
         except Exception:
             return []
         fields = detect_input_fields(
@@ -192,10 +195,13 @@ class GPHandler:
             self._log("[Portal] Cửa sổ GlobalProtect đã thay đổi; bỏ tọa độ cũ.")
             return False
         rect = current_rect
+        get_capture_rect = getattr(self.adapter, "get_capture_rect_for_hwnd", None)
+        image_rect = get_capture_rect(rect.get("id")) if get_capture_rect else None
+        image_rect = image_rect or rect
         if fields:
             x0, y0, w0, h0 = fields[0]
-            click_x = rect["x"] + x0 + w0 // 2
-            click_y = rect["y"] + y0 + h0 // 2
+            click_x = image_rect["x"] + x0 + w0 // 2
+            click_y = image_rect["y"] + y0 + h0 // 2
             self._log(f"[Portal] Dùng tọa độ OpenCV: ({click_x}, {click_y})")
         else:
             click_x = rect["x"] + int(rect["w"] * 0.5)
@@ -233,13 +239,16 @@ class GPHandler:
             self._log("[Credentials] Cửa sổ GlobalProtect đã thay đổi; bỏ tọa độ cũ.")
             return False
         rect = current_rect
+        get_capture_rect = getattr(self.adapter, "get_capture_rect_for_hwnd", None)
+        image_rect = get_capture_rect(rect.get("id")) if get_capture_rect else None
+        image_rect = image_rect or rect
         if len(fields) >= 2:
             x0, y0, w0, h0 = fields[0]
-            click_x0 = rect["x"] + x0 + w0 // 2
-            click_y0 = rect["y"] + y0 + h0 // 2
+            click_x0 = image_rect["x"] + x0 + w0 // 2
+            click_y0 = image_rect["y"] + y0 + h0 // 2
             x1, y1, w1, h1 = fields[1]
-            click_x1 = rect["x"] + x1 + w1 // 2
-            click_y1 = rect["y"] + y1 + h1 // 2
+            click_x1 = image_rect["x"] + x1 + w1 // 2
+            click_y1 = image_rect["y"] + y1 + h1 // 2
         else:
             click_x0 = rect["x"] + int(rect["w"] * 0.5)
             click_y0 = rect["y"] + int(rect["h"] * 0.59)

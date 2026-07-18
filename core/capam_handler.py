@@ -81,15 +81,22 @@ class CAPAMHandler:
             if "jab" in locals():
                 jab.close()
             self._jab_retry_at = time.monotonic() + 2.0
-            if self._jab_attempts >= 3:
-                self._jab_failed = True
-                self._log(f"[CAPAM] JAB không khả dụng sau 3 lần, dùng vision fallback: {exc}")
+            if self._jab_attempts == 3:
+                self._log(
+                    f"[CAPAM] JAB chưa sẵn sàng sau 3 lần; tiếp tục retry cùng vision fallback: {exc}"
+                )
             return None
 
     def close(self) -> None:
         if self._jab:
             self._jab.close()
             self._jab = None
+
+    def _invalidate_jab(self) -> None:
+        if self._jab:
+            self._jab.close()
+            self._jab = None
+        self._jab_retry_at = time.monotonic() + 2.0
 
     # ------------------------------------------------------------------
     # Khởi động
@@ -138,6 +145,7 @@ class CAPAMHandler:
                     jab.bounds("text", "Username", rect),
                     jab.bounds("password text", "Password", rect),
                 ]
+            self._invalidate_jab()
         try:
             self.adapter.take_screenshot(rect, self._screenshot_tmp)
         except Exception:
@@ -158,6 +166,8 @@ class CAPAMHandler:
         jab = self._get_jab(rect)
         if jab and jab.has("combo box", "Address"):
             return [jab.bounds("combo box", "Address", rect)]
+        if jab:
+            self._invalidate_jab()
         fields = self._likely_text_fields(rect, self._detect_fields(rect))
         if fields:
             return fields
@@ -420,7 +430,13 @@ class CAPAMHandler:
                 jab.set_text("password text", "Password", password)
                 jab.click("Login")
                 deadline = time.monotonic() + 20
+                device_list_title = (
+                    f"Symantec Privileged Access Manager Client - {self.capam_ip}"
+                )
                 while time.monotonic() < deadline:
+                    if self.adapter.get_window_rect(device_list_title, exact=True):
+                        self._log("[Login] Đã xác minh Device List xuất hiện sau JAB Login.")
+                        return True
                     if self.adapter.get_window_rect_for_hwnd(rect.get("id")) is None:
                         return True
                     if not jab.has("text", "Username") and not jab.has("password text", "Password"):

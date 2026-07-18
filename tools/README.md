@@ -35,6 +35,8 @@ artifacts/diagnostics/<UTC timestamp>/
   manifest.json
 ```
 
+Targeted runs store only target-window metadata. `--list-windows` prints full inventory to stdout; review it before redirecting to a file because unrelated window titles may contain personal data.
+
 Do not use `--allow-sensitive` unless screenshot has been reviewed and redacted. Tool refuses credential-stage capture by default.
 
 ## Java Access Bridge probe
@@ -66,3 +68,41 @@ Collect one run per stage and machine:
 - Exact window title, HWND and rect.
 
 Never collect password, OTP, clipboard content or accessible control values.
+
+## Live flow monitor
+
+Observe app lifecycle, foreground HWND, exact window geometry, network reachability, capture hash/stddev, vision field candidates, UIA/JAB availability and runtime FSM events. Tool never clicks, types, saves screenshots, or reads credential control values.
+
+```powershell
+python -m tools.monitor_flow --duration 120 --interval 0.5 --output artifacts/diagnostics/flow-timeline.jsonl
+```
+
+For synchronized runtime events, set same session ID and timeline path before starting app:
+
+```powershell
+$env:AUTOMATION_SESSION_ID = "run-20260718-01"
+$env:AUTOMATION_TIMELINE_PATH = "artifacts/diagnostics/run-20260718-01.jsonl"
+python -m tools.monitor_flow --duration 120 --output $env:AUTOMATION_TIMELINE_PATH
+python main.py
+```
+
+Runtime and monitor records share `session_id`, `utc`, `monotonic`, `sequence`, `source`, and `event`. Merge by `monotonic`; inspect `state_enter`, `state_transition`, `observation`, `vision`, `semantic`, and `run_exception`.
+
+Recommended synchronized launcher:
+
+```powershell
+python -m tools.run_debug_flow --duration 300 --interval 0.5
+```
+
+Launcher opens GUI for interactive password-prefix/OTP entry and writes `debug-session.json` plus `flow-timeline.jsonl` under one new diagnostic run directory. It never receives credentials through command-line arguments or environment variables.
+
+## Focus/Z-order probe
+
+Inspect foreground owner, window class, Z-order, `WS_EX_TOPMOST`, `WS_EX_NOACTIVATE`, owner HWND, cloaked/minimized state and overlap without clicking:
+
+```powershell
+python -m tools.probe_focus
+python -m tools.probe_focus --exercise "CAPAM AutoSign" --duration 3
+```
+
+`--exercise` only requests foreground for exact title and records which window takes focus back. It does not minimize, click, or type.

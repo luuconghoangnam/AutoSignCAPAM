@@ -9,6 +9,7 @@ import os
 import subprocess
 import time
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 from adapters.base import OSAdapter
 
@@ -209,18 +210,43 @@ class WindowsAdapter(OSAdapter):
         return False
 
     @staticmethod
-    def _find_window(title_keyword: str, exact: bool = False):
+    def _window_candidates(title_keyword: str, exact: bool = False):
+        import win32gui
+
+        windows = []
+
+        def visit(hwnd, _lparam):
+            if not win32gui.IsWindowVisible(hwnd):
+                return
+            title = win32gui.GetWindowText(hwnd)
+            matches = title == title_keyword if exact else title_keyword.lower() in title.lower()
+            if not matches:
+                return
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            width, height = right - left, bottom - top
+            if width > 0 and height > 0:
+                windows.append(
+                    SimpleNamespace(
+                        title=title,
+                        left=left,
+                        top=top,
+                        width=width,
+                        height=height,
+                        _hWnd=hwnd,
+                    )
+                )
+
+        win32gui.EnumWindows(visit, None)
+        return windows
+
+    @classmethod
+    def _find_window(cls, title_keyword: str, exact: bool = False):
         import ctypes
-        import pygetwindow as gw
 
-        windows = gw.getWindowsWithTitle(title_keyword)
-        if exact or title_keyword == "GlobalProtect":
-            windows = [window for window in windows if window.title == title_keyword]
-
-        windows = [
-            window for window in windows
-            if window.width > 0 and window.height > 0
-        ]
+        windows = cls._window_candidates(
+            title_keyword,
+            exact=exact or title_keyword == "GlobalProtect",
+        )
 
         if not windows:
             return None
@@ -318,12 +344,7 @@ class WindowsAdapter(OSAdapter):
         """Choose unowned exact-title CAPAM window; dialogs have an owner HWND."""
         try:
             import ctypes
-            import pygetwindow as gw
-            windows = [
-                window for window in gw.getWindowsWithTitle("Symantec Privileged Access Manager")
-                if window.title == "Symantec Privileged Access Manager"
-                and window.width > 0 and window.height > 0
-            ]
+            windows = self._window_candidates("Symantec Privileged Access Manager", exact=True)
             if not windows:
                 return None
             unowned = [
@@ -347,12 +368,7 @@ class WindowsAdapter(OSAdapter):
         """Choose owned exact-title CAPAM authentication dialog."""
         try:
             import ctypes
-            import pygetwindow as gw
-            windows = [
-                window for window in gw.getWindowsWithTitle("Symantec Privileged Access Manager")
-                if window.title == "Symantec Privileged Access Manager"
-                and window.width > 0 and window.height > 0
-            ]
+            windows = self._window_candidates("Symantec Privileged Access Manager", exact=True)
             if not windows:
                 return None
             if len(windows) == 1:
@@ -396,6 +412,32 @@ class WindowsAdapter(OSAdapter):
                 "y": rect[1],
                 "w": rect[2] - rect[0],
                 "h": rect[3] - rect[1],
+                "id": hwnd,
+            }
+        except Exception:
+            return None
+
+    def get_capture_rect_for_hwnd(self, hwnd) -> dict | None:
+        """Return physical screen bounds represented by HWND ImageGrab pixels."""
+        if not hwnd:
+            return None
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            if not user32.IsWindow(hwnd):
+                return None
+            client = (ctypes.c_long * 4)()
+            origin = (ctypes.c_long * 2)()
+            if not user32.GetClientRect(hwnd, client):
+                return None
+            if not user32.ClientToScreen(hwnd, origin):
+                return None
+            return {
+                "x": origin[0],
+                "y": origin[1],
+                "w": client[2] - client[0],
+                "h": client[3] - client[1],
                 "id": hwnd,
             }
         except Exception:
@@ -531,35 +573,52 @@ class WindowsAdapter(OSAdapter):
         """Return visible top-level HWNDs and titles owned by mstsc.exe."""
         try:
             import ctypes
-            from ctypes import wintypes
+            import win32gui
 
-            user32 = ctypes.windll.user32
             kernel32 = ctypes.windll.kernel32
             result = {}
-            callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
             def visit(hwnd, _):
-                if not user32.IsWindowVisible(hwnd):
-                    return True
-                pid = wintypes.DWORD()
-                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                process = kernel32.OpenProcess(0x1000, False, pid.value)
+                if not win32gui.IsWindowVisible(hwnd):
+                    return
+                _, pid = __import__("win32process").GetWindowThreadProcessId(hwnd)
+                process = kernel32.OpenProcess(0x1000, False, pid)
                 if not process:
-                    return True
+                    return
                 try:
                     buffer = ctypes.create_unicode_buffer(1024)
-                    size = wintypes.DWORD(len(buffer))
+                    size = ctypes.c_ulong(len(buffer))
                     if kernel32.QueryFullProcessImageNameW(process, 0, buffer, ctypes.byref(size)):
                         if os.path.basename(buffer.value).lower() == "mstsc.exe":
-                            length = user32.GetWindowTextLengthW(hwnd) + 1
-                            title = ctypes.create_unicode_buffer(length)
-                            user32.GetWindowTextW(hwnd, title, length)
-                            result[int(hwnd)] = title.value
+                            result[int(hwnd)] = win32gui.GetWindowText(hwnd)
                 finally:
                     kernel32.CloseHandle(process)
-                return True
 
-            user32.EnumWindows(callback_type(visit), 0)
+            win32gui.EnumWindows(visit, None)
             return result
         except Exception:
             return {}
+
+    def window_belongs_to_process(self, hwnd: int, process_name: str) -> bool:
+        if not hwnd:
+            return False
+        try:
+            import ctypes
+
+            pid = ctypes.c_ulong()
+            ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            process = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid.value)
+            if not process:
+                return False
+            try:
+                buffer = ctypes.create_unicode_buffer(1024)
+                size = ctypes.c_ulong(len(buffer))
+                if not ctypes.windll.kernel32.QueryFullProcessImageNameW(
+                    process, 0, buffer, ctypes.byref(size)
+                ):
+                    return False
+                return os.path.basename(buffer.value).lower() == process_name.lower()
+            finally:
+                ctypes.windll.kernel32.CloseHandle(process)
+        except Exception:
+            return False
