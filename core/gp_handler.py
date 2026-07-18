@@ -39,7 +39,6 @@ class GPHandler:
         self._screenshot_tmp = os.path.join(
             tempfile.gettempdir(), f"gp_crop_{os.getpid()}_{uuid.uuid4().hex}.png"
         )
-        self._debug_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "debug_gp_fields.png")
 
     # ------------------------------------------------------------------
     # Public API

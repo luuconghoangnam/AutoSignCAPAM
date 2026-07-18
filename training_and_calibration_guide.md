@@ -6,9 +6,10 @@ Tài liệu này hướng dẫn chi tiết cách tự chụp ảnh mẫu (templa
 
 ## 🗺️ Cơ chế hoạt động của Bộ nhận diện
 
-Phần mềm sử dụng 2 cơ chế chính để điều khiển tự động:
-1. **Template Matching (Khớp ảnh mẫu):** Tìm dòng thiết bị (`10.64.211.200` hoặc `10.64.211.12`) và tìm nút bấm **[RDP]** tương ứng bên cạnh để click.
-2. **Contour Detection (Phát hiện đường biên):** Quét động các ô nhập mật khẩu/tài khoản trên giao diện CAPAM Login và bảng Windows Security dựa trên hình khối hộp (không dùng ảnh mẫu tĩnh).
+Runtime hiện tại dùng ba cơ chế:
+1. **Template Matching:** Tìm dòng thiết bị và nút RDP cùng hàng, có quét nhiều scale.
+2. **Contour Detection:** Nhận diện field GlobalProtect/CAPAM khi semantic backend không đủ dữ liệu.
+3. **Guarded Keyboard:** Điền Windows Security theo focus mặc định, kiểm tra exact HWND và postcondition.
 
 ---
 
@@ -41,26 +42,21 @@ Khi chạy trên máy tính mới (đặc biệt là Windows), font chữ render
 
 ---
 
-## 2. Hiệu chỉnh thông số Contour (Nhận diện ô Input)
+## 2. Hiệu chỉnh Contour fallback
 
-Nếu phần mềm tìm thấy cửa sổ CAPAM/Windows Security nhưng **không tự điền được Username/Password**, nguyên nhân là do kích thước pixel của các ô nhập liệu trên Windows khác với Linux.
+Nếu phần mềm tìm thấy GlobalProtect/CAPAM nhưng không resolve được field, kiểm tra detector fallback. Windows Security không dùng detector này.
 
-### Đoạn code cấu hình trong `main_automation.py` (Hàm `detect_capam_fields`):
+### Đoạn code cấu hình hiện tại trong `vision/field_detector.py`:
 
-```python
-# Dòng ~409 trong main_automation.py
-for c in contours:
-    x, y, w, h = cv2.boundingRect(c)
-    # Kích thước ô nhập liệu cần nhận dạng (Width từ 80-280px, Height từ 12-40px)
-    if 80 <= w <= 280 and 12 <= h <= 40:
-        fields.append((x, y, w, h))
-```
+Detector dùng tỉ lệ width/height theo kích thước ảnh cửa sổ và ngưỡng sáng theo profile. Không chỉnh bằng pixel tuyệt đối nếu chưa có regression images ở DPI 100%, 125% và 150%.
 
-### Cách Calibrate:
-- **Nếu ô nhập liệu của Windows Security quá ngắn hoặc quá dài:** Đo kích thước thực tế của ô nhập liệu (bằng cách chụp ảnh màn hình và xem kích thước pixel trong Paint).
-- **Điều chỉnh điều kiện lọc:** 
-  - Nếu ô nhập liệu rộng 350px → Tăng giới hạn `w <= 280` lên `w <= 380`.
-  - Nếu chiều cao ô nhập liệu nhỏ hơn 12px → Giảm giới hạn `12 <= h` xuống `8 <= h`.
+### Cách Calibrate legacy:
+
+Field detector hiện tại vẫn giữ làm fallback. Hybrid detector trong `hybrid_windows_automation_architecture_plan.md` sẽ thay dần việc chỉnh ngưỡng pixel thủ công.
+- Lưu screenshot cửa sổ đích trước khi nhập credential.
+- Ghi Windows build, DPI, font scale và kích thước HWND.
+- Điều chỉnh `ratio_limits`/`_MIN_MEAN` trong `vision/field_detector.py`.
+- Chạy lại toàn bộ ảnh calibration, không chỉ ảnh đang fail.
 
 ---
 
@@ -71,16 +67,7 @@ for c in contours:
 *   `0.6 - 0.7`: Khớp tương đối (khuyến nghị).
 *   `< 0.5`: Dễ nhận diện nhầm các chi tiết khác trên màn hình.
 
-### Các vị trí cần điều chỉnh trong `main_automation.py`:
-
-1. **Độ khớp IP Thiết bị (Dòng ~303):**
-   ```python
-   if max_val_dev < 0.65: # Tăng lên 0.75 nếu bị nhận diện sai thiết bị, giảm xuống 0.55 nếu không tìm thấy
-   ```
-2. **Độ khớp Nút RDP (Dòng ~314):**
-   ```python
-   threshold = 0.65 # Có thể hạ xuống 0.60 nếu nút RDP trên Windows có màu hơi khác
-   ```
+`vision/template_matcher.py` nhận candidate từ `0.65`; `core/rdp_handler.py` chỉ cho action khi device và RDP cùng đạt `0.70`, target ổn định hai frame. Không hạ action threshold nếu chưa kiểm tra false-positive cùng hàng.
 
 ---
 
@@ -89,7 +76,7 @@ for c in contours:
 Trên Windows, khi bật tính năng phóng to màn hình (DPI Scaling 125%, 150%), tọa độ click của PyAutoGUI có thể bị lệch so với tọa độ OpenCV tìm được.
 
 ### Cách khắc phục:
-Thêm đoạn code sau vào ngay dưới phần import trong `main_automation.py` để ép Windows chạy ở chế độ tọa độ chuẩn (DPI Aware):
+DPI awareness đã được cấu hình trong `config.py`, import trước khi tạo QApplication. Không thêm lần nữa ở module khác:
 
 ```python
 import platform

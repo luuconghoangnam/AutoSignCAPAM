@@ -48,6 +48,12 @@ class LinuxAdapter(OSAdapter):
         window_id = rect.get("id")
         if not window_id:
             return False
+        try:
+            subprocess.run(["wmctrl", "-i", "-a", str(window_id)], check=False)
+            time.sleep(0.1)
+            return self.is_foreground(rect)
+        except Exception:
+            return False
 
     def wait_focus_rect(self, rect: dict, timeout: float = 5.0) -> bool:
         deadline = time.monotonic() + timeout
@@ -59,12 +65,6 @@ class LinuxAdapter(OSAdapter):
 
     def suppress_browser_foreground(self) -> bool:
         return False
-        try:
-            subprocess.run(["wmctrl", "-i", "-a", str(window_id)], check=False)
-            time.sleep(0.1)
-            return self.is_foreground(rect)
-        except Exception:
-            return False
 
     def is_foreground(self, rect: dict) -> bool:
         try:

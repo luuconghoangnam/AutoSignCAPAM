@@ -246,7 +246,6 @@ class MainWindow(QMainWindow):
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             self.txt_username.setText(data.get("username", ""))
-            self.txt_pass_prefix.setText(data.get("password_prefix", ""))
             self.txt_capam_ip.setText(data.get("capam_ip", CAPAM_IP_DEFAULT))
             self.chk_auto_exit.setChecked(data.get("auto_exit", True))
             self.chk_block_browser.setChecked(data.get("block_browser", True))
@@ -257,7 +256,6 @@ class MainWindow(QMainWindow):
         try:
             data = {
                 "username": self.txt_username.text().strip(),
-                "password_prefix": self.txt_pass_prefix.text().strip(),
                 "capam_ip": self.txt_capam_ip.text().strip(),
                 "auto_exit": self.chk_auto_exit.isChecked(),
                 "block_browser": self.chk_block_browser.isChecked(),

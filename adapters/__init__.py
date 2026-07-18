@@ -6,8 +6,11 @@ import platform
 
 def get_os_adapter():
     """Trả về OSAdapter phù hợp với hệ điều hành đang chạy."""
-    if platform.system() == "Windows":
+    system = platform.system()
+    if system == "Windows":
         from adapters.windows import WindowsAdapter
         return WindowsAdapter()
-    from adapters.linux import LinuxAdapter
-    return LinuxAdapter()
+    if system == "Linux":
+        from adapters.linux import LinuxAdapter
+        return LinuxAdapter()
+    raise RuntimeError(f"Unsupported operating system: {system}")

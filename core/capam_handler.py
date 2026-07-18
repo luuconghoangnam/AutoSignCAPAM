@@ -502,3 +502,23 @@ class CAPAMHandler:
 
         self._log("[Login] Thất bại sau 3 lần thử đăng nhập CAPAM.")
         return False
+
+    def wait_for_login_success(self, max_wait: int = 20) -> bool:
+        """Verify that CAPAM login controls disappear after submission."""
+        deadline = time.monotonic() + max_wait
+        stable_count = 0
+        while time.monotonic() < deadline:
+            if self._cancelled():
+                return False
+            rect = self.adapter.get_capam_main_rect()
+            if not rect:
+                return True
+            fields = self._detect_fields(rect)
+            if len(fields) == 0:
+                stable_count += 1
+                if stable_count >= _STABLE_DETECTIONS:
+                    return True
+            else:
+                stable_count = 0
+            time.sleep(_POLL_INTERVAL)
+        return False

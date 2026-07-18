@@ -17,11 +17,11 @@ class OSAdapter:
         Returns:
             True nếu tìm và focus thành công.
         """
-        return False
+        raise NotImplementedError
 
     def focus_rect(self, rect: dict) -> bool:
         """Focus exact window instance represented by rect/HWND."""
-        return False
+        raise NotImplementedError
 
     def wait_focus_rect(self, rect: dict, timeout: float = 5.0) -> bool:
         """Retry exact target focus while transient windows finish opening."""
@@ -33,7 +33,7 @@ class OSAdapter:
 
     def is_foreground(self, rect: dict) -> bool:
         """Return whether exact window instance currently owns foreground."""
-        return True
+        raise NotImplementedError
 
     def get_window_rect(self, title_keyword: str, exact: bool = False) -> dict | None:
         """Lấy vị trí và kích thước của cửa sổ.
@@ -41,7 +41,7 @@ class OSAdapter:
         Returns:
             Dict với keys 'x', 'y', 'w', 'h' hoặc None nếu không tìm thấy.
         """
-        return None
+        raise NotImplementedError
 
     def get_capam_main_rect(self) -> dict | None:
         """Return main CAPAM window, excluding same-title dialogs."""
@@ -57,7 +57,7 @@ class OSAdapter:
 
     def take_screenshot(self, rect: dict, path: str) -> None:
         """Chụp ảnh vùng màn hình được chỉ định và lưu ra file."""
-        pass
+        raise NotImplementedError
 
     def capture_window(self, rect: dict):
         """Capture exact window into memory; returns BGR ndarray or None."""
@@ -65,23 +65,23 @@ class OSAdapter:
 
     def take_full_screenshot(self, path: str) -> None:
         """Chụp toàn màn hình và lưu ra file."""
-        pass
+        raise NotImplementedError
 
     def refresh_window(self, rect: dict) -> None:
         """Yêu cầu cửa sổ vẽ lại nội dung trước khi chụp."""
-        pass
+        return None
 
     def kill_capam(self) -> None:
         """Tắt tiến trình CAPAM Client."""
-        pass
+        raise NotImplementedError
 
     def kill_window_process(self, rect: dict) -> bool:
         """Tắt process sở hữu HWND trong rect."""
-        return False
+        raise NotImplementedError
 
     def launch_capam(self) -> bool:
         """Khởi động CAPAM Client. Returns True nếu thành công."""
-        return False
+        raise NotImplementedError
 
     def launch_gp_ui(self) -> bool:
         """Kích hoạt hoặc hiển thị lại bảng UI của GlobalProtect.
@@ -91,7 +91,7 @@ class OSAdapter:
 
     def get_gp_log_path(self) -> str:
         """Trả về đường dẫn tuyệt đối đến file log của GlobalProtect."""
-        return ""
+        raise NotImplementedError
 
     def get_rdp_windows(self) -> dict[int, str]:
         """Return visible mstsc window handles and titles in current session."""

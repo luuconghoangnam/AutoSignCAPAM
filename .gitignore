@@ -13,21 +13,17 @@ venv/
 
 # Debug and temporary images
 *debug_scr.png
+debug_*.png
 capam_full_scr.png
 gp_crop.png
 screenshot_current.png
+train_gp_*.png
+gp_field_coordinates.txt
+artifacts/
 
 # Settings file (chứa thông tin người dùng)
 *.json
 ~/.capam_autosign_settings.json
-
-# Venv
-venv/
-
-# Pycache
-__pycache__/
-*.pyc
-*.pyo
 
 # Scratch / debug scripts
 scratch/

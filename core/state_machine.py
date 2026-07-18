@@ -1,8 +1,7 @@
 """
 core/state_machine.py — FSM điều phối toàn bộ luồng tự động hóa
 
-Thay thế vòng lặp lồng nhau trong main_automation.py bằng Finite State Machine.
-Mỗi state là một phương thức riêng biệt trả về state tiếp theo.
+Mỗi state tách riêng và trả về state tiếp theo.
 """
 import time
 
@@ -253,6 +252,9 @@ class AutomationWorker(QThread):
         if not success:
             return "ERROR"
         if self.server_choice == "none":
+            if not self._capam.wait_for_login_success():
+                self._log("CAPAM login chưa được xác minh sau khi gửi thông tin.")
+                return "ERROR"
             return "DONE"
         return "RDP_WAIT_LIST"
 

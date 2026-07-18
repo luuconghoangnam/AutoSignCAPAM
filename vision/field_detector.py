@@ -5,35 +5,15 @@ Thay thế 2 hàm detect_gp_fields / detect_capam_fields bằng một hàm
 thống nhất với "profile" xác định ngưỡng kích thước khác nhau.
 Có thêm fallback pixel-based khi Canny không tìm được contour.
 """
-import os
 import platform
 import cv2
 import numpy as np
 
 
-# --- Legacy pixel limits retained as broad safety limits. Main limits use ratios. ---
-_PROFILES = {
-    "gp": {
-        "min_w": (100, 120),   # (Windows, Linux)
-        "max_w": (320, 290),
-        "min_h": (10, 15),
-        "max_h": (55, 45),
-        "min_mean": (150, 200),  # độ sáng trung bình tối thiểu (lọc nút bấm)
-    },
-    "capam": {
-        "min_w": (60, 80),
-        "max_w": (320, 280),
-        "min_h": (10, 12),
-        "max_h": (50, 40),
-        "min_mean": (180, 180),    # Lọc nút bấm xanh/xám tối
-    },
-    "windows_security": {
-        "min_w": (60, 80),
-        "max_w": (380, 320),
-        "min_h": (10, 12),
-        "max_h": (50, 40),
-        "min_mean": (0, 0),
-    },
+_MIN_MEAN = {
+    "gp": (150, 200),
+    "capam": (180, 180),
+    "windows_security": (0, 0),
 }
 
 _IS_WINDOWS = platform.system() == "Windows"
@@ -58,9 +38,8 @@ def detect_input_fields(
     if img is None:
         return []
 
-    cfg = _PROFILES.get(profile, _PROFILES["capam"])
     idx = 0 if _IS_WINDOWS else 1
-    min_mean = cfg["min_mean"][idx]
+    min_mean = _MIN_MEAN.get(profile, _MIN_MEAN["capam"])[idx]
     image_h, image_w = img.shape[:2]
     # Controls scale with DPI. Absolute pixel thresholds reject 125%/150% frames.
     ratio_limits = {

@@ -34,8 +34,23 @@ python3 -m PyInstaller --noconsole --onefile \
     --exclude-module matplotlib \
     --exclude-module IPython \
     --exclude-module jinja2 \
+    --add-data "ui/icon.png:ui" \
+    --add-data "ui/radio_unchecked.png:ui" \
+    --add-data "ui/radio_checked.png:ui" \
+    --add-data "ui/checkbox_unchecked.png:ui" \
+    --add-data "ui/checkbox_checked.png:ui" \
+    --paths "." \
+    --hidden-import "adapters" \
+    --hidden-import "adapters.linux" \
+    --hidden-import "core.state_machine" \
+    --hidden-import "core.gp_handler" \
+    --hidden-import "core.capam_handler" \
+    --hidden-import "core.rdp_handler" \
+    --hidden-import "vision.field_detector" \
+    --hidden-import "vision.template_matcher" \
+    --hidden-import "ui.main_window" \
     --name "CAPAM_AutoSign_Linux" \
-    main_automation.py
+    main.py
 
 echo "Đang dọn dẹp các tệp tin tạm (build, spec)..."
 rm -rf build/ *.spec

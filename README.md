@@ -30,7 +30,7 @@ Công cụ tự động hóa quy trình đăng nhập **Symantec Privileged Acce
 git clone https://github.com/luuconghoangnam/ToolsSignCAPAM.git
 cd ToolsSignCAPAM
 pip install -r requirements.txt
-python main_automation.py
+python main.py
 ```
 
 ## Đóng gói thành file thực thi
@@ -44,7 +44,7 @@ bash build_linux.sh
 ### Windows
 ```bat
 build_windows.bat
-# Output: dist/CAPAM_AutoSign_Windows.exe
+# Output: dist/CAPAM AutoSign.exe
 ```
 
 ## Cách sử dụng
@@ -60,7 +60,12 @@ build_windows.bat
 
 ```
 ToolsSignCAPAM/
-├── main_automation.py     # Logic chính + giao diện PyQt5
+├── main.py                # Entry point ứng dụng
+├── core/                  # FSM và workflow handlers
+├── adapters/              # Tích hợp Windows/Linux
+├── vision/                # Nhận diện field/template
+├── automation/            # Java Access Bridge tùy chọn
+├── ui/                    # Giao diện PyQt5
 ├── requirements.txt       # Thư viện phụ thuộc Python
 ├── build_linux.sh         # Script đóng gói cho Linux
 ├── build_windows.bat      # Script đóng gói cho Windows
