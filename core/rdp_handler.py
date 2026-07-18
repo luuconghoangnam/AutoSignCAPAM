@@ -41,6 +41,11 @@ class RDPHandler:
             time.sleep(remaining)
 
     @staticmethod
+    def _postcondition_poll_delay(attempt: int) -> float:
+        """Probe new dialogs quickly, then back off to avoid event/log spam."""
+        return min(0.75, 0.1 * (1.5 ** attempt))
+
+    @staticmethod
     def _same_rect(previous: dict | None, current: dict) -> bool:
         if not previous:
             return False
@@ -268,13 +273,17 @@ class RDPHandler:
                 # Opening an RDP session is not idempotent. CAPAM may need several
                 # seconds to create its auth dialog, so never click this row twice.
                 confirm_deadline = min(deadline, time.monotonic() + 15.0)
+                confirm_attempt = 0
                 while time.monotonic() < confirm_deadline:
                     if self._cancelled():
                         return False
                     self.adapter.suppress_browser_foreground()
                     if self._click_started_rdp(self._attempt_context, expected_session_title):
                         return True
-                    time.sleep(0.1)
+                    remaining = confirm_deadline - time.monotonic()
+                    if remaining > 0:
+                        time.sleep(min(remaining, self._postcondition_poll_delay(confirm_attempt)))
+                    confirm_attempt += 1
                 self._log(
                     "Click RDP chưa tạo bảng xác thực hoặc phiên RDP sau 15 giây; "
                     "không click lại để tránh mở hai phiên."

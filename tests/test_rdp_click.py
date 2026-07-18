@@ -107,6 +107,44 @@ class RDPClickTests(unittest.TestCase):
 
         click.assert_called_once()
 
+    def test_rdp_waits_for_slow_dialog_without_clicking_twice(self):
+        adapter = _ClickAdapter()
+        handler = RDPHandler(adapter)
+        image = np.zeros((300, 400, 3), dtype=np.uint8)
+        snapshot = SimpleNamespace(
+            image=image,
+            rect=adapter.rect.copy(),
+            is_blank=False,
+            mean_delta=lambda previous: 0.0,
+        )
+        clock = [0.0]
+
+        def monotonic():
+            return clock[0]
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        adapter.get_capam_dialog_rect = lambda: (
+            {"id": 123, "process_name": "CAPAMClient.exe"}
+            if clock[0] >= 8.0 else None
+        )
+        with (
+            patch.object(handler._capture, "capture", return_value=snapshot),
+            patch("core.rdp_handler.find_device_rdp_button", return_value={
+                "point": (200, 150), "device_score": 0.9, "rdp_score": 0.9,
+            }),
+            patch("core.rdp_handler.time.monotonic", side_effect=monotonic),
+            patch("core.rdp_handler.time.sleep", side_effect=sleep),
+            patch("core.rdp_handler.pyautogui.click") as click,
+        ):
+            self.assertTrue(
+                handler.click_rdp("200", "10.0.0.1", expected_rect=adapter.rect)
+            )
+
+        click.assert_called_once()
+        self.assertGreaterEqual(clock[0], 8.0)
+
 
 if __name__ == "__main__":
     unittest.main()
