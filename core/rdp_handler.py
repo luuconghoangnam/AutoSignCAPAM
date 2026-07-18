@@ -30,6 +30,7 @@ class RDPHandler:
         self._log = log_fn or (lambda msg: None)
         self._cancelled = cancel_fn or (lambda: False)
         self._capture = FrameCapture(adapter)
+        self._attempt_context = None
         run_id = f"{os.getpid()}_{uuid.uuid4().hex}"
         self._screenshot_tmp = os.path.join(tempfile.gettempdir(), f"capam_window_{run_id}.png")
 
@@ -44,6 +45,25 @@ class RDPHandler:
         if not previous:
             return False
         return all(previous.get(key) == current.get(key) for key in ("id", "x", "y", "w", "h"))
+
+    def _click_started_rdp(self, context: dict, expected_session_title: str | None) -> bool:
+        existing_auth_hwnds = context["auth_hwnds"]
+        for title in WIN_SEC_TITLES:
+            candidates = (
+                [self.adapter.get_capam_dialog_rect()]
+                if title == WIN_SEC_TITLE
+                else self.adapter.get_window_rects(title, exact=True)
+            )
+            if any(item and item.get("id") not in existing_auth_hwnds for item in candidates):
+                return True
+        if set(self.adapter.get_rdp_windows()) - set(context["rdp_windows"]):
+            return True
+        if expected_session_title:
+            session = self.adapter.get_window_rect(expected_session_title, exact=True)
+            previous = context.get("session")
+            if session and (not previous or session.get("id") != previous.get("id")):
+                return True
+        return False
 
     def wait_for_device_list(self, capam_ip: str, max_wait: int = 60) -> dict | None:
         """Chờ cửa sổ danh sách thiết bị CAPAM xuất hiện.
@@ -110,6 +130,7 @@ class RDPHandler:
             # Java HWND capture can be blank while occluded. Activate exact device-list
             # window before the first capture, not after successful recognition.
             if not focused_once or not self.adapter.is_foreground(rect):
+                self.adapter.suppress_browser_foreground()
                 if not self.adapter.wait_focus_rect(rect, timeout=5.0):
                     self._log("Không thể đưa danh sách thiết bị CAPAM lên foreground để nhận diện.")
                     self._wait_next_poll(poll_started, deadline)
@@ -153,10 +174,10 @@ class RDPHandler:
 
             if rendered_at is None:
                 rendered_at = time.monotonic()
-            elif time.monotonic() - rendered_at >= 12:
+            elif time.monotonic() - rendered_at >= 20:
                 self._log(
                     "Màn hình danh sách đã render nhưng không nhận diện được thiết bị "
-                    "sau 12 giây; dừng retry để tránh vòng lặp kéo dài."
+                    "sau 20 giây; dừng retry để tránh vòng lặp kéo dài."
                 )
                 return False
 
@@ -218,8 +239,47 @@ class RDPHandler:
                     self._log("Foreground đổi trước click RDP; hủy click.")
                     stable_count = 0
                     continue
+                expected_session_title = {
+                    "200": "RDP-211.200",
+                    "12": "Terminal-211.12",
+                }.get(device_choice)
+                self._attempt_context = {
+                    "clicked_at": time.monotonic(),
+                    "device_list": rect.copy(),
+                    "auth_hwnds": {
+                        item["id"]
+                        for title in WIN_SEC_TITLES
+                        for item in self.adapter.get_window_rects(title, exact=True)
+                    },
+                    "rdp_windows": self.adapter.get_rdp_windows(),
+                    "session": (
+                        self.adapter.get_window_rect(expected_session_title, exact=True)
+                        if expected_session_title else None
+                    ),
+                }
+                # CAPAM is Java Swing. WM_LBUTTON messages sent to its top-level
+                # HWND can report success without reaching the child control.
+                if not self.adapter.is_foreground(rect):
+                    self._log("Foreground đổi khi chuẩn bị click RDP; không click desktop.")
+                    stable_count = 0
+                    continue
                 pyautogui.click(click_x, click_y)
-                return True
+                self._log("Đã gửi click chuột thật vào nút RDP.")
+                # Opening an RDP session is not idempotent. CAPAM may need several
+                # seconds to create its auth dialog, so never click this row twice.
+                confirm_deadline = min(deadline, time.monotonic() + 15.0)
+                while time.monotonic() < confirm_deadline:
+                    if self._cancelled():
+                        return False
+                    self.adapter.suppress_browser_foreground()
+                    if self._click_started_rdp(self._attempt_context, expected_session_title):
+                        return True
+                    time.sleep(0.1)
+                self._log(
+                    "Click RDP chưa tạo bảng xác thực hoặc phiên RDP sau 15 giây; "
+                    "không click lại để tránh mở hai phiên."
+                )
+                return False
             match_misses += 1
             stable_count = 0
             previous_result = None
@@ -229,6 +289,8 @@ class RDPHandler:
                     f"Nhận diện trượt {match_misses} frame; kích hoạt lại đúng cửa sổ CAPAM..."
                 )
                 focused_once = False
+                self.adapter.suppress_browser_foreground()
+                self.adapter.wait_focus_rect(rect, timeout=2.0)
                 self.adapter.refresh_window(rect)
             elif match_misses % 2 == 0:
                 self._log(f"Nhận diện trượt {match_misses} frame; yêu cầu CAPAM vẽ lại...")
@@ -241,12 +303,14 @@ class RDPHandler:
         Returns: True nếu hoàn tất.
         """
         self._log("Đang chờ bảng Windows Security xuất hiện...")
-        existing_rdp_windows = self.adapter.get_rdp_windows()
+        context = self._attempt_context or {}
+        existing_rdp_windows = context.get("rdp_windows", self.adapter.get_rdp_windows())
+        existing_auth_hwnds = context.get("auth_hwnds", set())
         expected_session_title = {
             "200": "RDP-211.200",
             "12": "Terminal-211.12",
         }.get(device_choice)
-        existing_session = (
+        existing_session = context.get("session") or (
             self.adapter.get_window_rect(expected_session_title, exact=True)
             if expected_session_title else None
         )
@@ -257,18 +321,29 @@ class RDPHandler:
         while time.monotonic() < deadline:
             if self._cancelled():
                 return False
+            candidates = []
             for candidate_title in WIN_SEC_TITLES:
                 if candidate_title == WIN_SEC_TITLE:
-                    rect = self.adapter.get_capam_dialog_rect()
+                    candidate = self.adapter.get_capam_dialog_rect()
+                    title_candidates = [candidate] if candidate else []
                 else:
-                    rect = self.adapter.get_window_rect(candidate_title, exact=True)
-                if rect:
-                    window_title = candidate_title
-                    elapsed = time.monotonic() - started
-                    self._log(
-                        f"Đã phát hiện bảng xác thực '{window_title}' sau {elapsed:.1f} giây."
-                    )
-                    break
+                    title_candidates = self.adapter.get_window_rects(candidate_title, exact=True)
+                for candidate in title_candidates:
+                    if not candidate or candidate.get("id") in existing_auth_hwnds:
+                        continue
+                    if candidate.get("process_name", "").lower() != "capamclient.exe":
+                        continue
+                    candidates.append((candidate_title, candidate))
+            unique = {candidate["id"]: (title, candidate) for title, candidate in candidates}
+            if len(unique) == 1:
+                window_title, rect = next(iter(unique.values()))
+                elapsed = time.monotonic() - started
+                self._log(
+                    f"Đã phát hiện bảng xác thực '{window_title}' sau {elapsed:.1f} giây."
+                )
+            elif len(unique) > 1:
+                self._log("Có nhiều bảng xác thực mới; từ chối nhập credential do ambiguous.")
+                return False
             if rect:
                 break
             time.sleep(min(_POLL_INTERVAL, max(0, deadline - time.monotonic())))

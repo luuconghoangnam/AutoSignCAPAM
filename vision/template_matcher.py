@@ -55,18 +55,14 @@ def _scaled_templates(
 
 
 def _best_match(scene: np.ndarray, template: np.ndarray):
-    """Find scale coarse-to-fine while keeping common DPI scales fast."""
+    """Find global best scale; never stop at first merely acceptable match."""
     best = None
     for scale, variant in _scaled_templates(template, scene.shape):
         result = cv2.matchTemplate(scene, variant, cv2.TM_CCOEFF_NORMED)
         _, score, _, location = cv2.minMaxLoc(result)
         if best is None or score > best[0]:
             best = (score, location, variant.shape[:2], scale)
-        # Common DPI scales run first. Stable two-frame validation protects click.
-        if score >= 0.78:
-            break
-
-    if best is None or best[0] >= 0.78:
+    if best is None:
         return best
 
     # Coarse 10% scan can miss Java UI scaling such as 95% or 145%.
