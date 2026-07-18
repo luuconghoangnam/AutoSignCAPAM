@@ -153,7 +153,8 @@ class AutomationWorker(QThread):
         ):
             self._log(
                 f"GP evidence mâu thuẫn: log={state}, visual={visual_state}; "
-                "từ chối nhập và chờ frame/log mới."
+                f"client={client.get('w', rect['w'])}x{client.get('h', rect['h'])}, "
+                f"fields={fields}; từ chối nhập và chờ frame/log mới."
             )
             self._gp_visual_state = STATE_UNKNOWN
             self._gp_visual_count = 0

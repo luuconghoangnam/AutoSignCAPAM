@@ -75,9 +75,13 @@ def detect_input_fields(
             if debug_img is not None:
                 cv2.rectangle(debug_img, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
-    # Nếu không tìm được qua Canny, thử pixel-based: tìm vùng màu sáng hình chữ nhật
-    if not fields and profile == "gp":
-        fields = _pixel_fallback(gray, min_wr, max_wr, min_hr, max_hr, debug_img)
+    # Win11 flat/rounded controls can leave one field visible to Canny and the
+    # other visible only as a bright rectangle. Merge both sources when GP has
+    # fewer than two candidates; geometry classification still gates action.
+    if profile == "gp" and len(fields) < 2:
+        fields.extend(
+            _pixel_fallback(gray, min_wr, max_wr, min_hr, max_hr, debug_img)
+        )
 
     # Loại bỏ các ô nhập trùng lặp hoặc lồng nhau (viền trong / viền ngoài của cùng 1 ô)
     fields = _deduplicate_fields(fields)
