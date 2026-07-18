@@ -8,6 +8,9 @@ class OSAdapter:
     Mỗi nền tảng (Linux, Windows) sẽ implement lớp này.
     """
 
+    def set_diagnostic_fn(self, diagnostic_fn) -> None:
+        self._diagnostic_fn = diagnostic_fn
+
     def focus_window(self, title_keyword: str, exact: bool = False) -> bool:
         """Đưa cửa sổ có tiêu đề khớp lên foreground và kích hoạt.
 
@@ -35,6 +38,10 @@ class OSAdapter:
         """Return whether exact window instance currently owns foreground."""
         raise NotImplementedError
 
+    def click_window_point(self, rect: dict, screen_x: int, screen_y: int) -> bool:
+        """Send a click to an exact window without depending on desktop z-order."""
+        return False
+
     def get_window_rect(self, title_keyword: str, exact: bool = False) -> dict | None:
         """Lấy vị trí và kích thước của cửa sổ.
 
@@ -42,6 +49,10 @@ class OSAdapter:
             Dict với keys 'x', 'y', 'w', 'h' hoặc None nếu không tìm thấy.
         """
         raise NotImplementedError
+
+    def get_window_rects(self, title_keyword: str, exact: bool = False) -> list[dict]:
+        item = self.get_window_rect(title_keyword, exact=exact)
+        return [item] if item else []
 
     def get_capam_main_rect(self) -> dict | None:
         """Return main CAPAM window, excluding same-title dialogs."""
@@ -100,3 +111,10 @@ class OSAdapter:
     def window_belongs_to_process(self, hwnd: int, process_name: str) -> bool:
         """Return whether exact HWND is currently owned by expected process."""
         return False
+
+    def set_browser_callback_suppression(self, enabled: bool) -> None:
+        self._browser_callback_suppression = enabled
+
+    def restore_suppressed_windows(self) -> None:
+        """Restore windows minimized by this adapter during current run."""
+        return None

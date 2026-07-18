@@ -57,6 +57,8 @@ echo [4/5] Dong goi ung dung...
     --paths "." ^
     --hidden-import "adapters" ^
     --hidden-import "adapters.windows" ^
+    --hidden-import "adapters.window_identity" ^
+    --hidden-import "adapters.windows_discovery" ^
     --hidden-import "adapters.linux" ^
     --hidden-import "core" ^
     --hidden-import "core.state_machine" ^
