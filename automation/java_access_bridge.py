@@ -41,12 +41,12 @@ class CAPAMJAB:
     @staticmethod
     def find_bridge(capam_exe: str) -> str | None:
         root = Path(capam_exe).resolve().parent
-        allowed = (
-            root / "runtime-17.0.10_7" / "bin" / "WindowsAccessBridge-64.dll",
+        candidates = [
             root / "runtime" / "bin" / "WindowsAccessBridge-64.dll",
             root / "jre" / "bin" / "WindowsAccessBridge-64.dll",
-        )
-        matches = [path for path in allowed if path.is_file()]
+            *(path / "bin" / "WindowsAccessBridge-64.dll" for path in root.glob("runtime-*")),
+        ]
+        matches = sorted({path.resolve() for path in candidates if path.is_file()})
         return str(matches[0]) if len(matches) == 1 else None
 
     def _thread_main(self, bridge_dll: str) -> None:
@@ -195,8 +195,59 @@ class CAPAMJAB:
         try:
             self._call(lambda wrapper: bool(self._find_node(wrapper, role, name)), timeout=5)
             return True
-        except JABUnavailable:
+        except Exception:
             return False
+
+    def snapshot_controls(self) -> list[dict]:
+        """Return control metadata without reading accessible text values."""
+        def action(wrapper):
+            tree = self._tree(wrapper)
+            roots = []
+            for attr in ("root", "_root"):
+                root = getattr(tree, attr, None)
+                if root is not None:
+                    roots = [root]
+                    break
+            if not roots:
+                try:
+                    roots = list(tree)
+                except TypeError:
+                    return []
+
+            seen = set()
+
+            def serialize(node, depth=0):
+                identity = id(node)
+                if identity in seen or depth > 20:
+                    return None
+                seen.add(identity)
+                info = node.context_info
+                item = {
+                    "role": str(getattr(info, "role", "")),
+                    "name": str(getattr(info, "name", "")),
+                    "description": str(getattr(info, "description", "")),
+                    "states": str(getattr(info, "states", "")),
+                    "x": int(getattr(info, "x", 0)),
+                    "y": int(getattr(info, "y", 0)),
+                    "width": int(getattr(info, "width", 0)),
+                    "height": int(getattr(info, "height", 0)),
+                    "children": [],
+                }
+                try:
+                    children = list(node)
+                except TypeError:
+                    children = []
+                for child in children:
+                    if child is node:
+                        continue
+                    serialized = serialize(child, depth + 1)
+                    if serialized is not None:
+                        item["children"].append(serialized)
+                return item
+
+            return [item for node in roots if (item := serialize(node)) is not None]
+
+        return self._call(action, timeout=20)
 
     def close(self) -> None:
         if self._closed:
