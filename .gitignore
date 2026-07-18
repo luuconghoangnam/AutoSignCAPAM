@@ -6,6 +6,7 @@ build/
 # Python cache
 __pycache__/
 *.pyc
+*.log
 
 # Virtual Environment
 venv/
@@ -22,8 +23,7 @@ gp_field_coordinates.txt
 artifacts/
 
 # Settings file (chứa thông tin người dùng)
-*.json
-~/.capam_autosign_settings.json
+.capam_autosign_settings.json
 
 # Scratch / debug scripts
 scratch/
