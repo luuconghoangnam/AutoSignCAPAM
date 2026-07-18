@@ -108,8 +108,16 @@ class LinuxAdapter(OSAdapter):
         display = os.environ.get("DISPLAY", ":0")
         subprocess.run(["maim", path], env={"DISPLAY": display}, check=True)
 
-    def kill_capam(self) -> None:
-        subprocess.run(["pkill", "-f", "CAPAMClient"], check=False)
+    def is_capam_running(self) -> bool:
+        return subprocess.run(
+            ["pgrep", "-f", "CAPAMClient"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode == 0
+
+    def kill_capam(self) -> bool:
+        return subprocess.run(["pkill", "-f", "CAPAMClient"], check=False).returncode in (0, 1)
 
     def launch_capam(self) -> bool:
         try:

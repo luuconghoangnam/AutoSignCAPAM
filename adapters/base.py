@@ -82,8 +82,12 @@ class OSAdapter:
         """Yêu cầu cửa sổ vẽ lại nội dung trước khi chụp."""
         return None
 
-    def kill_capam(self) -> None:
-        """Tắt tiến trình CAPAM Client."""
+    def is_capam_running(self) -> bool:
+        """Return whether any exact CAPAM Client process is still running."""
+        return bool(self.get_capam_main_rect())
+
+    def kill_capam(self) -> bool:
+        """Tắt mọi tiến trình CAPAM Client. Returns True nếu lệnh thành công."""
         raise NotImplementedError
 
     def kill_window_process(self, rect: dict) -> bool:

@@ -86,22 +86,21 @@ class AutomationWorker(QThread):
 
     def _state_reset_capam(self) -> str:
         """Đóng CAPAM cũ để mỗi lượt automation bắt đầu từ màn hình Address."""
-        capam_rect = self._adapter.get_capam_main_rect()
-        if not capam_rect:
+        if not self._adapter.is_capam_running():
             return "CHECK_VPN"
 
-        self._log("Đang đóng phiên CAPAM cũ để bắt đầu lại từ đầu...")
-        if not self._adapter.kill_window_process(capam_rect):
-            self._log("Không xác định được process của phiên CAPAM cũ.")
+        self._log("Đang đóng mọi tiến trình CAPAM cũ để bắt đầu lại từ đầu...")
+        if not self._adapter.kill_capam():
+            self._log("Không thể gửi lệnh đóng tiến trình CAPAM cũ.")
             return "ERROR"
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            if not self._adapter.get_capam_main_rect():
-                self._log("Đã đóng phiên CAPAM cũ.")
+            if not self._adapter.is_capam_running():
+                self._log("Đã xác minh mọi tiến trình CAPAM cũ kết thúc.")
                 return "CHECK_VPN"
             time.sleep(0.2)
 
-        self._log("Không thể đóng phiên CAPAM cũ trong 5 giây.")
+        self._log("Tiến trình CAPAM cũ vẫn còn chạy sau 5 giây; không mở instance mới.")
         return "ERROR"
 
     def _state_gp_start(self) -> str:

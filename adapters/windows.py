@@ -623,13 +623,33 @@ class WindowsAdapter(OSAdapter):
         except Exception:
             pass
 
-    def kill_capam(self) -> None:
-        creationflags = 0x08000000  # CREATE_NO_WINDOW
-        subprocess.run(
-            ["taskkill", "/F", "/IM", "CAPAMClient.exe"],
-            check=False,
-            creationflags=creationflags,
-        )
+    def is_capam_running(self) -> bool:
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq CAPAMClient.exe", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                text=True,
+                check=False,
+                creationflags=0x08000000,
+            )
+            return any(
+                line.strip().lower().startswith('"capamclient.exe"')
+                for line in result.stdout.splitlines()
+            )
+        except Exception:
+            return bool(self.get_window_rects("Symantec Privileged Access Manager"))
+
+    def kill_capam(self) -> bool:
+        try:
+            if not self.is_capam_running():
+                return True
+            return subprocess.run(
+                ["taskkill", "/F", "/T", "/IM", "CAPAMClient.exe"],
+                check=False,
+                creationflags=0x08000000,
+            ).returncode == 0
+        except Exception:
+            return False
 
     def find_capam_exe(self) -> str | None:
         """Resolve verified absolute CAPAM executable from supported sources."""
