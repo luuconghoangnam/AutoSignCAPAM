@@ -6,6 +6,7 @@ build/
 # Python cache
 __pycache__/
 *.pyc
+*.log
 
 # Virtual Environment
 venv/
@@ -13,21 +14,16 @@ venv/
 
 # Debug and temporary images
 *debug_scr.png
+debug_*.png
 capam_full_scr.png
 gp_crop.png
 screenshot_current.png
+train_gp_*.png
+gp_field_coordinates.txt
+artifacts/
 
 # Settings file (chứa thông tin người dùng)
-*.json
-~/.capam_autosign_settings.json
-
-# Venv
-venv/
-
-# Pycache
-__pycache__/
-*.pyc
-*.pyo
+.capam_autosign_settings.json
 
 # Scratch / debug scripts
 scratch/
@@ -42,7 +38,6 @@ gp_state_detector.py
 list_tray_items.py
 activate_gp_ui.py
 take_screenshot.py
-test_*.py
 verify_templates.py
 crop_templates.py
 investigation_report.md

@@ -1,6 +1,6 @@
 # Báo cáo Bảo mật — CAPAM Auto-Sign Tool
 
-> **Phạm vi:** Phân tích bảo mật toàn diện mã nguồn `main_automation.py` và hệ thống liên quan.  
+> **Phạm vi:** Phân tích bảo mật mã nguồn hiện tại trong `main.py`, `core/`, `adapters/`, `vision/` và `ui/`.
 > **Mức độ rủi ro:** Dùng thang 🔴 Cao / 🟠 Trung bình / 🟡 Thấp / 🟢 Chấp nhận được
 
 ---
@@ -18,44 +18,27 @@ Công cụ này được thiết kế để **tự động hóa quy trình đăn
 
 ---
 
-## 1. 🔴 Mật khẩu lưu dạng plaintext
+## 1. 🟢 Mật khẩu không còn được lưu tự động
 
-**File liên quan:** `main_automation.py` → `save_settings()`, `~/.capam_autosign_settings.json`
+**File liên quan:** `ui/main_window.py` → `_save_settings()`, `~/.capam_autosign_settings.json`
 
-**Mô tả:**  
-Mật khẩu (password_prefix) được lưu dưới dạng văn bản thuần túy (plaintext) trong file JSON trên đĩa:
+**Trạng thái:** Đã xử lý trong `ui/main_window.py`. `_save_settings()` chỉ lưu username, CAPAM IP và tùy chọn UI; password không còn được ghi vào JSON. File cũ trên máy người dùng vẫn có thể chứa password và cần được xóa thủ công hoặc migrate.
 
-```json
-{
-  "username": "user.example",
-  "password_prefix": "MatKhauThucTe123",
-  "capam_ip": "10.64.213.188"
-}
-```
+**Việc còn lại:**
 
-**Rủi ro:**  
-Bất kỳ người dùng hoặc phần mềm nào có quyền đọc file `~/.capam_autosign_settings.json` đều có thể lấy được mật khẩu mà không cần bẻ khóa.
-
-**Đề xuất khắc phục:**
-
-- **Ngắn hạn:** Đặt quyền file chỉ cho owner đọc được:
-  ```python
-  import stat
-  os.chmod(self.settings_file, stat.S_IRUSR | stat.S_IWUSR)  # chmod 600
-  ```
-- **Dài hạn:** Dùng `keyring` (Hệ thống Keychain OS) thay file JSON:
+- Nếu cần ghi nhớ password, dùng `keyring` (Windows Credential Manager/KWallet), không dùng JSON:
   ```python
   import keyring
   keyring.set_password("capam_autosign", username, password)
   password = keyring.get_password("capam_autosign", username)
   ```
-  `keyring` tự động dùng KWallet (Linux), Credential Manager (Windows) — mật khẩu được mã hóa bởi OS.
+`keyring` tự động dùng KWallet (Linux), Credential Manager (Windows).
 
 ---
 
 ## 2. 🔴 OTP truyền qua tham số hàm (lưu trong memory)
 
-**File liên quan:** `AutomationWorker.__init__()`, `start_automation()`
+**File liên quan:** `core/state_machine.py`, `ui/main_window.py`
 
 **Mô tả:**  
 OTP 6 số được lưu như thuộc tính `self.otp` của thread worker trong suốt quá trình automation, không được xóa sau khi sử dụng xong:
@@ -80,7 +63,7 @@ self.otp = ""  # Xóa ngay
 
 ## 3. 🟠 Chụp màn hình toàn bộ tại thời điểm automation
 
-**File liên quan:** `detect_capam_fields()`, `take_full_screenshot()`
+**File liên quan:** `vision/field_detector.py`, `adapters/windows.py`, `adapters/linux.py`
 
 **Mô tả:**  
 Trong quá trình tự động hóa, công cụ chụp ảnh màn hình đầy đủ (`maim` trên Linux, `PIL.ImageGrab` trên Windows) để phát hiện cửa sổ và ô nhập liệu.
@@ -101,7 +84,7 @@ Nếu người dùng đang mở các màn hình chứa thông tin nhạy cảm (
 
 ## 4. 🟠 Không xác thực server CAPAM (Man-in-the-Middle)
 
-**File liên quan:** `wait_for_network()`, flow kết nối WebSocket CAPAM
+**File liên quan:** `core/gp_handler.py`, flow kiểm tra kết nối CAPAM
 
 **Mô tả:**  
 Công cụ kiểm tra kết nối mạng đến server CAPAM bằng TCP socket thuần:
@@ -155,7 +138,7 @@ Nếu người dùng vô tình click vào cửa sổ khác trong khi automation 
 
 ## 6. 🟠 Không giới hạn số lần thử đăng nhập
 
-**File liên quan:** Toàn bộ `run()` trong `AutomationWorker`
+**File liên quan:** `core/state_machine.py`, `core/gp_handler.py`
 
 **Mô tả:**  
 Nếu OTP sai, mật khẩu sai hoặc kết nối thất bại, công cụ báo lỗi và dừng — không retry tự động sai OTP. Tuy nhiên, **không có cơ chế giới hạn** nếu người dùng chạy lại nhiều lần liên tiếp với OTP sai.

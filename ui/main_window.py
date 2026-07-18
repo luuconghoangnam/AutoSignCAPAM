@@ -110,6 +110,23 @@ def apply_dark_title_bar(window: QMainWindow) -> None:
             pass
 
 
+def clear_topmost(window: QMainWindow) -> None:
+    """Keep controller below target apps even if prior focus calls left it topmost."""
+    import platform
+    if platform.system() != "Windows":
+        return
+    try:
+        import ctypes
+
+        hwnd = int(window.winId())
+        # HWND_NOTOPMOST; SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_FRAMECHANGED
+        ctypes.windll.user32.SetWindowPos(
+            hwnd, -2, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0020
+        )
+    except Exception:
+        pass
+
+
 class MainWindow(QMainWindow):
 
     def __init__(self):
@@ -130,6 +147,7 @@ class MainWindow(QMainWindow):
 
         # Apply dark title bar (Windows 10/11)
         apply_dark_title_bar(self)
+        clear_topmost(self)
 
         # Set Window Icon
         icon_path = get_resource_path("ui/icon.png")
@@ -150,6 +168,7 @@ class MainWindow(QMainWindow):
         v_user.setSpacing(3)
         v_user.addWidget(QLabel("Tài khoản:"))
         self.txt_username = QLineEdit()
+        self.txt_username.setObjectName("username_input")
         self.txt_username.setPlaceholderText("username")
         v_user.addWidget(self.txt_username)
 
@@ -163,6 +182,7 @@ class MainWindow(QMainWindow):
         h_pass_lbl.addStretch()
         v_pass.addLayout(h_pass_lbl)
         self.txt_pass_prefix = QLineEdit()
+        self.txt_pass_prefix.setObjectName("password_prefix_input")
         self.txt_pass_prefix.setEchoMode(QLineEdit.Password)
         self.txt_pass_prefix.setPlaceholderText("mật khẩu")
         v_pass.addWidget(self.txt_pass_prefix)
@@ -171,6 +191,7 @@ class MainWindow(QMainWindow):
         v_ip.setSpacing(3)
         v_ip.addWidget(QLabel("IP CAPAM:"))
         self.txt_capam_ip = QLineEdit()
+        self.txt_capam_ip.setObjectName("capam_ip_input")
         self.txt_capam_ip.setText(CAPAM_IP_DEFAULT)
         self.txt_capam_ip.setPlaceholderText("10.x.x.x")
         v_ip.addWidget(self.txt_capam_ip)
@@ -213,13 +234,14 @@ class MainWindow(QMainWindow):
         self.chk_auto_exit.setChecked(True)
         layout.addWidget(self.chk_auto_exit)
 
-        self.chk_block_browser = QCheckBox("Chặn trình duyệt chiếm focus sau khi VPN kết nối")
+        self.chk_block_browser = QCheckBox("Đóng tab callback GlobalProtect khi nó chiếm focus")
         self.chk_block_browser.setChecked(True)
         layout.addWidget(self.chk_block_browser)
 
         # --- Nút bấm ---
         btn_layout = QHBoxLayout()
         self.btn_run = QPushButton("TIẾN HÀNH ĐĂNG NHẬP")
+        self.btn_run.setObjectName("run_button")
         self.btn_run.clicked.connect(self.start_automation)
         self.btn_cancel = QPushButton("HỦY")
         self.btn_cancel.setObjectName("btn_cancel")
@@ -232,6 +254,7 @@ class MainWindow(QMainWindow):
         # --- Logs ---
         layout.addWidget(QLabel("Nhật ký thực thi:"))
         self.txt_logs = QTextEdit()
+        self.txt_logs.setObjectName("runtime_log")
         self.txt_logs.setReadOnly(True)
         layout.addWidget(self.txt_logs)
 
@@ -246,7 +269,6 @@ class MainWindow(QMainWindow):
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             self.txt_username.setText(data.get("username", ""))
-            self.txt_pass_prefix.setText(data.get("password_prefix", ""))
             self.txt_capam_ip.setText(data.get("capam_ip", CAPAM_IP_DEFAULT))
             self.chk_auto_exit.setChecked(data.get("auto_exit", True))
             self.chk_block_browser.setChecked(data.get("block_browser", True))
@@ -257,7 +279,6 @@ class MainWindow(QMainWindow):
         try:
             data = {
                 "username": self.txt_username.text().strip(),
-                "password_prefix": self.txt_pass_prefix.text().strip(),
                 "capam_ip": self.txt_capam_ip.text().strip(),
                 "auto_exit": self.chk_auto_exit.isChecked(),
                 "block_browser": self.chk_block_browser.isChecked(),
@@ -274,6 +295,7 @@ class MainWindow(QMainWindow):
     def activate_on_startup(self) -> None:
         """Bring tool forward once, unless automation already started."""
         if not self.worker or not self.worker.isRunning():
+            clear_topmost(self)
             self.raise_()
             self.activateWindow()
 
@@ -337,6 +359,9 @@ class MainWindow(QMainWindow):
         )
         self.worker.log_signal.connect(self._log)
         self.worker.finished_signal.connect(self._automation_finished)
+        # Controller must not cover GP/CAPAM while guarded focus and clicks run.
+        clear_topmost(self)
+        self.showMinimized()
         self.worker.start()
 
     def cancel_automation(self) -> None:
@@ -359,3 +384,7 @@ class MainWindow(QMainWindow):
         self._set_controls_enabled(True)
         self.txt_otp.clear()
         self.txt_otp.setFocus()
+        clear_topmost(self)
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()

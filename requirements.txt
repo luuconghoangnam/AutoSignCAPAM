@@ -5,5 +5,6 @@ numpy
 pyperclip
 pygetwindow; sys_platform == 'win32'
 pillow; sys_platform == 'win32'
+java-access-bridge-wrapper==2.0.0; sys_platform == 'win32'
 dbus-python; sys_platform == 'linux'
 pyinstaller

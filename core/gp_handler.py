@@ -15,8 +15,10 @@ import uuid
 import pyautogui
 
 from adapters.base import OSAdapter
+from capture.window_capture import FrameCapture
 from vision.field_detector import detect_input_fields
 from config import GP_PORTAL_URL, write_text_safely
+from core.action_transaction import ActionTransaction
 
 
 
@@ -36,10 +38,12 @@ class GPHandler:
         self._log = log_fn or (lambda msg: None)
         self._cancelled = cancel_fn or (lambda: False)
         self._log_offset: int = 0
+        self._capture = FrameCapture(adapter)
+        self._actions = ActionTransaction()
+        self._last_capture_rect: dict | None = None
         self._screenshot_tmp = os.path.join(
             tempfile.gettempdir(), f"gp_crop_{os.getpid()}_{uuid.uuid4().hex}.png"
         )
-        self._debug_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "debug_gp_fields.png")
 
     # ------------------------------------------------------------------
     # Public API
@@ -162,12 +166,15 @@ class GPHandler:
 
     def detect_fields(self, rect: dict) -> list:
         """Chụp cửa sổ GP và phát hiện các ô nhập liệu bằng OpenCV."""
-        current_rect = self.adapter.get_window_rect_for_hwnd(rect.get("id"))
-        if not current_rect:
+        self._last_capture_rect = None
+        snapshot = self._capture.capture(rect)
+        if not snapshot or snapshot.is_blank:
             return []
-        rect = current_rect
+        self._last_capture_rect = snapshot.rect.copy()
         try:
-            self.adapter.take_screenshot(rect, self._screenshot_tmp)
+            import cv2
+
+            cv2.imwrite(self._screenshot_tmp, snapshot.image)
         except Exception:
             return []
         fields = detect_input_fields(
@@ -181,22 +188,64 @@ class GPHandler:
             pass
         return fields
 
+    @property
+    def last_capture_rect(self) -> dict | None:
+        return self._last_capture_rect.copy() if self._last_capture_rect else None
+
+    @staticmethod
+    def classify_fields(
+        fields: list,
+        width: int,
+        height: int,
+        credentials_expected: bool = False,
+    ) -> str:
+        """Classify calibrated GP geometry; reject count-only false positives."""
+        if width <= 0 or height <= 0:
+            return STATE_UNKNOWN
+        if len(fields) == 1:
+            x, y, w, h = fields[0]
+            credentials_layout = height / width >= 1.44
+            if (
+                (credentials_expected or credentials_layout)
+                and w / width >= 0.5
+                and h / height >= 0.04
+            ):
+                return STATE_CREDENTIALS
+            if w / width >= 0.5 and h / height >= 0.04 and y / height >= 0.65:
+                return STATE_PORTAL
+            return STATE_UNKNOWN
+        if len(fields) == 2:
+            first, second = sorted(fields, key=lambda item: item[1])
+            x0, y0, w0, h0 = first
+            x1, y1, w1, h1 = second
+            aligned = abs(x0 - x1) / width <= 0.05 and abs(w0 - w1) / width <= 0.08
+            ordered = 0.04 <= (y1 - y0) / height <= 0.25
+            practical = min(w0, w1) / width >= 0.5 and min(h0, h1) / height >= 0.04
+            if aligned and ordered and practical:
+                return STATE_CREDENTIALS
+        return STATE_UNKNOWN
+
     def enter_portal_url(self, rect: dict, fields: list) -> bool:
         """Điền URL portal vào ô nhập và nhấn Connect."""
+        if self._actions.is_committed("gp_portal_submit", rect):
+            self._log("[Portal] Portal submit đã gửi; chỉ chờ trạng thái tiếp theo.")
+            return True
         if not self.adapter.focus_rect(rect):
             self._log("[Portal] Không thể đưa đúng cửa sổ GlobalProtect lên foreground.")
             return False
         current_rect = self.adapter.get_window_rect_for_hwnd(rect.get("id"))
         if not current_rect or any(
-            rect.get(key) != current_rect.get(key) for key in ("id", "w", "h")
+            rect.get(key) != current_rect.get(key) for key in ("id", "x", "y", "w", "h")
         ):
             self._log("[Portal] Cửa sổ GlobalProtect đã thay đổi; bỏ tọa độ cũ.")
             return False
         rect = current_rect
+        image_rect = self._last_capture_rect if fields else None
+        image_rect = image_rect or rect
         if fields:
             x0, y0, w0, h0 = fields[0]
-            click_x = rect["x"] + x0 + w0 // 2
-            click_y = rect["y"] + y0 + h0 // 2
+            click_x = image_rect["x"] + x0 + w0 // 2
+            click_y = image_rect["y"] + y0 + h0 // 2
             self._log(f"[Portal] Dùng tọa độ OpenCV: ({click_x}, {click_y})")
         else:
             click_x = rect["x"] + int(rect["w"] * 0.5)
@@ -218,45 +267,96 @@ class GPHandler:
         if not self.adapter.is_foreground(rect):
             self._log("[Portal] Foreground đổi trong lúc nhập; không nhấn Enter.")
             return False
+        if not self._actions.commit("gp_portal_submit", rect):
+            self._log("[Portal] Portal submit đã gửi; không gửi lại.")
+            return True
         pyautogui.press("enter")
         self._log(f"Đã nhập portal '{GP_PORTAL_URL}', chờ chuyển trang đăng nhập...")
         return True
 
     def enter_credentials(self, rect: dict, fields: list, username: str, password: str) -> bool:
         """Điền tài khoản và mật khẩu vào màn hình đăng nhập GP."""
+        if self._actions.is_committed("gp_credentials_submit", rect):
+            self._log("[Credentials] Submit đã gửi; không nhập credential lại.")
+            return True
         if not self.adapter.focus_rect(rect):
             self._log("[Credentials] Không thể đưa đúng cửa sổ GlobalProtect lên foreground.")
             return False
         current_rect = self.adapter.get_window_rect_for_hwnd(rect.get("id"))
         if not current_rect or any(
-            rect.get(key) != current_rect.get(key) for key in ("id", "w", "h")
+            rect.get(key) != current_rect.get(key) for key in ("id", "x", "y", "w", "h")
         ):
             self._log("[Credentials] Cửa sổ GlobalProtect đã thay đổi; bỏ tọa độ cũ.")
             return False
         rect = current_rect
-        if len(fields) >= 2:
-            x0, y0, w0, h0 = fields[0]
-            click_x0 = rect["x"] + x0 + w0 // 2
-            click_y0 = rect["y"] + y0 + h0 // 2
-            x1, y1, w1, h1 = fields[1]
-            click_x1 = rect["x"] + x1 + w1 // 2
-            click_y1 = rect["y"] + y1 + h1 // 2
+        image_rect = self._last_capture_rect if fields else None
+        image_rect = image_rect or rect
+        get_control_rect = getattr(self.adapter, "get_descendant_control_rect", None)
+        username_control = get_control_rect(rect, 1166) if get_control_rect else None
+        password_control = get_control_rect(rect, 1167) if get_control_rect else None
+        if username_control and password_control:
+            click_x0 = username_control["x"] + username_control["w"] // 2
+            click_y0 = username_control["y"] + username_control["h"] // 2
+            click_x1 = password_control["x"] + password_control["w"] // 2
+            click_y1 = password_control["y"] + password_control["h"] // 2
+            self._log(
+                "[Credentials] Dùng Win32 control ID 1166/1167 để click trực tiếp "
+                "username/password."
+            )
+        elif len(fields) == 1:
+            x1, y1, w1, h1 = fields[0]
+            click_x1 = image_rect["x"] + x1 + w1 // 2
+            click_y1 = image_rect["y"] + y1 + h1 // 2
+            click_x0 = click_x1
+            click_y0 = click_y1 - int(h1 * 1.55)
+            self._log(
+                "[Credentials] Dùng ô password làm mốc; click trực tiếp username "
+                "phía trên rồi điền lại cả hai ô."
+            )
+        elif len(fields) >= 2:
+            ordered_fields = sorted(fields, key=lambda item: (item[1], item[0]))
+            x0, y0, w0, h0 = ordered_fields[0]
+            click_x0 = image_rect["x"] + x0 + w0 // 2
+            click_y0 = image_rect["y"] + y0 + h0 // 2
+            x1, y1, w1, h1 = ordered_fields[1]
+            click_x1 = image_rect["x"] + x1 + w1 // 2
+            click_y1 = image_rect["y"] + y1 + h1 // 2
         else:
+            self._log("[Credentials] Không thấy ô visible; dùng tọa độ chuẩn và điền lại cả hai ô.")
             click_x0 = rect["x"] + int(rect["w"] * 0.5)
             click_y0 = rect["y"] + int(rect["h"] * 0.59)
             click_x1 = rect["x"] + int(rect["w"] * 0.5)
             click_y1 = rect["y"] + int(rect["h"] * 0.69)
 
-        pyautogui.click(click_x0, click_y0)
-        time.sleep(0.1)
+        client = rect.get("client_rect") or image_rect
+        client_right = client["x"] + client["w"]
+        client_bottom = client["y"] + client["h"]
+        points_inside = all(
+            client["x"] <= x < client_right and client["y"] <= y < client_bottom
+            for x, y in ((click_x0, click_y0), (click_x1, click_y1))
+        )
+        self._log(
+            f"[Credentials] capture={image_rect['x']},{image_rect['y']},"
+            f"{image_rect['w']}x{image_rect['h']}; fields={fields}; "
+            f"username_point=({click_x0},{click_y0}); "
+            f"password_point=({click_x1},{click_y1})"
+        )
+        if not points_inside:
+            self._log("[Credentials] Điểm click nằm ngoài client; từ chối nhập credentials.")
+            return False
+
+        pyautogui.moveTo(click_x0, click_y0, duration=0.25)
+        pyautogui.click()
+        time.sleep(0.4)
         if not self.adapter.is_foreground(rect):
             return False
         pyautogui.hotkey("ctrl", "a")
         pyautogui.press("backspace")
         if not write_text_safely(username, lambda: self.adapter.is_foreground(rect)):
             return False
-        pyautogui.click(click_x1, click_y1)
-        time.sleep(0.1)
+        pyautogui.moveTo(click_x1, click_y1, duration=0.25)
+        pyautogui.click()
+        time.sleep(0.4)
         if not self.adapter.is_foreground(rect):
             return False
         pyautogui.hotkey("ctrl", "a")
@@ -270,6 +370,9 @@ class GPHandler:
         if not self.adapter.is_foreground(rect):
             self._log("[Credentials] Foreground đã đổi; không gửi Enter.")
             return False
+        if not self._actions.commit("gp_credentials_submit", rect):
+            self._log("[Credentials] Submit đã gửi; không nhấn Enter lần hai.")
+            return True
         pyautogui.press("enter")
         return True
 

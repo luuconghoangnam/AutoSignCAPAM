@@ -4,8 +4,20 @@ cd /d "%~dp0"
 
 set "VENV_PYTHON=%CD%\.venv\Scripts\python.exe"
 set "APP_NAME=CAPAM AutoSign"
+set "BUILD_REQUIREMENTS=requirements-windows-lock.txt"
 
 echo [1/5] Kiem tra Python 3...
+if exist "%VENV_PYTHON%" (
+    "%VENV_PYTHON%" -c "import sys" >nul 2>nul
+    if errorlevel 1 (
+        echo [INFO] Virtual environment .venv bi hong; dang tao lai...
+        rmdir /s /q ".venv"
+        if exist ".venv" (
+            echo [LOI] Khong xoa duoc virtual environment .venv bi hong.
+            exit /b 1
+        )
+    )
+)
 if not exist "%VENV_PYTHON%" (
     where py >nul 2>nul
     if not errorlevel 1 (
@@ -25,9 +37,11 @@ if not exist "%VENV_PYTHON%" (
 )
 
 echo [2/5] Cai dat dependencies trong .venv...
-"%VENV_PYTHON%" -m pip install --upgrade pip
-if errorlevel 1 exit /b 1
-"%VENV_PYTHON%" -m pip install -r "requirements.txt"
+if not exist "%BUILD_REQUIREMENTS%" (
+    echo [LOI] Khong tim thay lock file %BUILD_REQUIREMENTS%.
+    exit /b 1
+)
+"%VENV_PYTHON%" -m pip install --disable-pip-version-check -r "%BUILD_REQUIREMENTS%"
 if errorlevel 1 exit /b 1
 
 echo [3/5] Don dep build cu...
@@ -57,6 +71,8 @@ echo [4/5] Dong goi ung dung...
     --paths "." ^
     --hidden-import "adapters" ^
     --hidden-import "adapters.windows" ^
+    --hidden-import "adapters.window_identity" ^
+    --hidden-import "adapters.windows_discovery" ^
     --hidden-import "adapters.linux" ^
     --hidden-import "core" ^
     --hidden-import "core.state_machine" ^
@@ -66,6 +82,16 @@ echo [4/5] Dong goi ung dung...
     --hidden-import "vision" ^
     --hidden-import "vision.field_detector" ^
     --hidden-import "vision.template_matcher" ^
+    --hidden-import "capture" ^
+    --hidden-import "capture.frame" ^
+    --hidden-import "capture.window_capture" ^
+    --hidden-import "recognition" ^
+    --hidden-import "recognition.geometry" ^
+    --hidden-import "diagnostics" ^
+    --hidden-import "diagnostics.timeline" ^
+    --hidden-import "automation.java_access_bridge" ^
+    --hidden-import "JABWrapper.jab_wrapper" ^
+    --hidden-import "JABWrapper.context_tree" ^
     --hidden-import "ui" ^
     --hidden-import "ui.main_window" ^
     --exclude-module PyQt5.QtWebEngine ^

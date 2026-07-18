@@ -7,49 +7,14 @@ Tính năng nâng cấp:
 """
 import os
 import subprocess
+import threading
 import time
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 from adapters.base import OSAdapter
-
-
-# --- Danh sách đường dẫn cài đặt thường gặp của CAPAM Client ---
-CAPAM_CANDIDATE_PATHS = [
-    r"C:\Program Files\Broadcom\CAPAM Client\CAPAMClient.exe",
-    r"C:\Program Files (x86)\Broadcom\CAPAM Client\CAPAMClient.exe",
-    r"C:\Program Files\CA\CAPAM Client\CAPAMClient.exe",
-    r"C:\Program Files (x86)\CA\CAPAM Client\CAPAMClient.exe",
-    os.path.expanduser(r"~\CA PAM Client\CAPAMClient.exe"),
-    os.path.expanduser(r"~\CAPAM Client\CAPAMClient.exe"),
-]
-
-GP_EXE_PATHS = [
-    r"C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPA.exe",
-    r"C:\Program Files (x86)\Palo Alto Networks\GlobalProtect\PanGPA.exe",
-]
-
-
-def _find_capam_in_registry() -> str | None:
-    """Tìm đường dẫn CAPAM Client trong Windows Registry."""
-    try:
-        import winreg
-        for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
-            for sub in (
-                r"SOFTWARE\Broadcom\CAPAM Client",
-                r"SOFTWARE\CA\CAPAM Client",
-                r"SOFTWARE\WOW6432Node\Broadcom\CAPAM Client",
-            ):
-                try:
-                    with winreg.OpenKey(hive, sub) as key:
-                        install_dir, _ = winreg.QueryValueEx(key, "InstallPath")
-                        candidate = os.path.join(install_dir, "CAPAMClient.exe")
-                        if os.path.exists(candidate):
-                            return candidate
-                except (FileNotFoundError, OSError):
-                    continue
-    except ImportError:
-        pass
-    return None
+from adapters.window_identity import WindowBounds, WindowIdentity, WindowRef, identity_matches
+from adapters.windows_discovery import discover
 
 
 def _force_foreground(hwnd) -> bool:
@@ -66,9 +31,6 @@ def _force_foreground(hwnd) -> bool:
         if user32.IsIconic(hwnd):
             user32.ShowWindow(hwnd, 9)  # SW_RESTORE
 
-        # Put exact target at top of normal Z-order, never TOPMOST.
-        # SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW
-        user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0040)
         user32.SetForegroundWindow(hwnd)
 
         # Chờ cửa sổ thực sự lên foreground
@@ -102,12 +64,18 @@ def _switch_to_window(hwnd) -> bool:
         return False
 
 
+_DLL_DIRECTORY_LOCK = threading.Lock()
+
+
 def _get_clean_env() -> dict:
     import sys
     env = os.environ.copy()
     
     # 1. Xóa các biến môi trường liên quan đến Java hệ thống để buộc launcher dùng JRE đi kèm
-    for var in ["JAVA_HOME", "CLASSPATH", "JAVA_EXE", "JVM_PATH"]:
+    for var in [
+        "JAVA_HOME", "CLASSPATH", "JAVA_EXE", "JVM_PATH",
+        "RC_JAVA_ACCESS_BRIDGE_DLL", "ROBOT_ARTIFACTS",
+    ]:
         env.pop(var, None)
 
     # Tiến trình ngoài không được kế thừa metadata bootloader one-file.
@@ -121,6 +89,8 @@ def _get_clean_env() -> dict:
         path_list = path_val.split(os.pathsep)
         clean_path_list = []
         for p in path_list:
+            if not p or not os.path.isabs(p):
+                continue
             p_norm = os.path.normpath(p)
             p_lower = p_norm.lower()
             
@@ -147,12 +117,13 @@ def _external_process_context():
 
     kernel32 = ctypes.windll.kernel32
     frozen_dir = getattr(sys, "_MEIPASS", None)
-    kernel32.SetDllDirectoryW(None)
-    try:
-        yield
-    finally:
-        if frozen_dir:
-            kernel32.SetDllDirectoryW(frozen_dir)
+    with _DLL_DIRECTORY_LOCK:
+        kernel32.SetDllDirectoryW(None)
+        try:
+            yield
+        finally:
+            if frozen_dir:
+                kernel32.SetDllDirectoryW(frozen_dir)
 
 
 def _launch_external(command: list[str], env: dict, cwd: str | None = None) -> None:
@@ -167,6 +138,102 @@ def _launch_external(command: list[str], env: dict, cwd: str | None = None) -> N
 
 
 class WindowsAdapter(OSAdapter):
+
+    def __init__(self):
+        self.last_discovery = {}
+        self._suppressed_windows = []
+        self._diagnostic_fn = None
+        self._browser_callback_suppression = True
+        self._gp_callback_window = None
+
+    def _diag(self, event: str, **data) -> None:
+        if self._diagnostic_fn:
+            self._diagnostic_fn(event, **data)
+
+    @staticmethod
+    def is_gp_browser_callback(process_name: str, title: str) -> bool:
+        browsers = {
+            "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe",
+            "opera.exe", "coccoc.exe", "whale.exe", "iexplore.exe",
+        }
+        return (
+            process_name.lower() in browsers
+            and "globalprotect" in title.lower()
+        )
+
+    @staticmethod
+    def _window_ref(hwnd: int) -> WindowRef | None:
+        try:
+            import ctypes
+            import win32gui
+            import win32process
+
+            if not win32gui.IsWindow(hwnd):
+                return None
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            process_path = None
+            process_created = None
+            process = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+            if process:
+                try:
+                    buffer = ctypes.create_unicode_buffer(1024)
+                    size = ctypes.c_ulong(len(buffer))
+                    if ctypes.windll.kernel32.QueryFullProcessImageNameW(
+                        process, 0, buffer, ctypes.byref(size)
+                    ):
+                        process_path = buffer.value
+                    created = (ctypes.c_ulong * 2)()
+                    exited = (ctypes.c_ulong * 2)()
+                    kernel = (ctypes.c_ulong * 2)()
+                    user = (ctypes.c_ulong * 2)()
+                    if ctypes.windll.kernel32.GetProcessTimes(
+                        process,
+                        ctypes.byref(created), ctypes.byref(exited),
+                        ctypes.byref(kernel), ctypes.byref(user),
+                    ):
+                        process_created = (created[1] << 32) | created[0]
+                finally:
+                    ctypes.windll.kernel32.CloseHandle(process)
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            client = (ctypes.c_long * 4)()
+            origin = (ctypes.c_long * 2)()
+            if not ctypes.windll.user32.GetClientRect(hwnd, client):
+                return None
+            if not ctypes.windll.user32.ClientToScreen(hwnd, origin):
+                return None
+            identity = WindowIdentity(
+                hwnd=int(hwnd),
+                pid=pid,
+                process_name=os.path.basename(process_path or ""),
+                process_path=process_path,
+                process_created=process_created,
+                class_name=win32gui.GetClassName(hwnd),
+                title=win32gui.GetWindowText(hwnd),
+                owner_hwnd=int(win32gui.GetWindow(hwnd, 4) or 0),
+            )
+            return WindowRef(
+                identity=identity,
+                outer=WindowBounds(left, top, right - left, bottom - top),
+                client=WindowBounds(
+                    origin[0], origin[1], client[2] - client[0], client[3] - client[1]
+                ),
+            )
+        except Exception:
+            return None
+
+    def validate_window(self, expected: dict) -> dict | None:
+        hwnd = expected.get("id") if expected else None
+        ref = self._window_ref(hwnd) if hwnd else None
+        current = ref.as_dict() if ref else None
+        if not current or not identity_matches(expected, current):
+            self._diag(
+                "window_validation_failed",
+                hwnd=hwnd,
+                expected_pid=expected.get("pid") if expected else None,
+                actual_pid=current.get("pid") if current else None,
+            )
+            return None
+        return current
 
     @staticmethod
     def _foreground_process_name() -> str | None:
@@ -192,35 +259,104 @@ class WindowsAdapter(OSAdapter):
         return None
 
     def suppress_browser_foreground(self) -> bool:
-        browsers = {
-            "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe",
-            "opera.exe", "coccoc.exe", "whale.exe", "iexplore.exe"
-        }
-        if self._foreground_process_name() not in browsers:
+        if not self._browser_callback_suppression:
             return False
         try:
             import ctypes
             hwnd = ctypes.windll.user32.GetForegroundWindow()
-            if hwnd:
-                ctypes.windll.user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
+            ref = self._window_ref(hwnd) if hwnd else None
+            if not ref:
+                return False
+            identity = ref.identity
+            callback = self.is_gp_browser_callback(identity.process_name, identity.title)
+            tracked = self._gp_callback_window
+            same_tracked_window = bool(
+                tracked
+                and identity.hwnd == tracked.get("id")
+                and identity.pid == tracked.get("pid")
+                and identity.process_created == tracked.get("process_created")
+            )
+            if not callback and not same_tracked_window:
+                return False
+            expected = ref.as_dict()
+            if callback:
+                self._gp_callback_window = expected.copy()
+            if self.validate_window(expected) and ctypes.windll.user32.GetForegroundWindow() == hwnd:
+                import pyautogui
+
+                # Close only the correlated GP callback tab. If browser reused an
+                # existing window, Ctrl+W reveals the previous user tab unchanged.
+                pyautogui.hotkey("ctrl", "w")
+                self._diag(
+                    "gp_browser_callback_closed",
+                    hwnd=hwnd,
+                    pid=identity.pid,
+                    process_name=identity.process_name,
+                    title=identity.title,
+                )
+                self._gp_callback_window = None
                 return True
         except Exception:
             pass
         return False
 
-    @staticmethod
-    def _find_window(title_keyword: str, exact: bool = False):
+    def set_browser_callback_suppression(self, enabled: bool) -> None:
+        self._browser_callback_suppression = bool(enabled)
+        if not enabled:
+            self._gp_callback_window = None
+
+    def restore_suppressed_windows(self) -> None:
+        # Legacy minimized callbacks from earlier runs are restored; current
+        # policy closes only exact GP callback tabs and creates no restore debt.
         import ctypes
-        import pygetwindow as gw
+        for expected in self._suppressed_windows:
+            current = self.validate_window(expected)
+            if current and ctypes.windll.user32.IsIconic(current["id"]):
+                ctypes.windll.user32.ShowWindow(current["id"], 9)  # SW_RESTORE
+        self._suppressed_windows.clear()
 
-        windows = gw.getWindowsWithTitle(title_keyword)
-        if exact or title_keyword == "GlobalProtect":
-            windows = [window for window in windows if window.title == title_keyword]
+    @staticmethod
+    def _window_candidates(title_keyword: str, exact: bool = False):
+        import win32gui
 
-        windows = [
-            window for window in windows
-            if window.width > 0 and window.height > 0
-        ]
+        windows = []
+
+        def visit(hwnd, _lparam):
+            if not win32gui.IsWindowVisible(hwnd):
+                return
+            title = win32gui.GetWindowText(hwnd)
+            matches = title == title_keyword if exact else title_keyword.lower() in title.lower()
+            if not matches:
+                return
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            width, height = right - left, bottom - top
+            if width > 0 and height > 0:
+                ref = WindowsAdapter._window_ref(hwnd)
+                if not ref:
+                    return
+                windows.append(
+                    SimpleNamespace(
+                        title=title,
+                        left=left,
+                        top=top,
+                        width=width,
+                        height=height,
+                        _hWnd=hwnd,
+                        ref=ref,
+                    )
+                )
+
+        win32gui.EnumWindows(visit, None)
+        return windows
+
+    @classmethod
+    def _find_window(cls, title_keyword: str, exact: bool = False):
+        import ctypes
+
+        windows = cls._window_candidates(
+            title_keyword,
+            exact=exact or title_keyword == "GlobalProtect",
+        )
 
         if not windows:
             return None
@@ -253,14 +389,22 @@ class WindowsAdapter(OSAdapter):
             return False
 
     def focus_rect(self, rect: dict) -> bool:
-        hwnd = rect.get("id")
-        if not hwnd:
+        started = time.monotonic()
+        current = self.validate_window(rect)
+        if not current:
+            self._diag("focus_result", allowed=False, reason="identity-invalid")
             return False
+        hwnd = current["id"]
         try:
             import ctypes
             if ctypes.windll.user32.IsWindow(hwnd) == 0:
                 return False
-            return _force_foreground(hwnd)
+            result = _force_foreground(hwnd)
+            self._diag(
+                "focus_result", allowed=result, hwnd=hwnd, pid=current.get("pid"),
+                elapsed_ms=round((time.monotonic() - started) * 1000, 2),
+            )
+            return result
         except Exception:
             return False
 
@@ -271,7 +415,7 @@ class WindowsAdapter(OSAdapter):
         deadline = time.monotonic() + timeout
         attempt = 0
         while time.monotonic() < deadline:
-            current = self.get_window_rect_for_hwnd(hwnd)
+            current = self.validate_window(rect)
             if not current:
                 return False
             if self.is_foreground(current):
@@ -289,9 +433,10 @@ class WindowsAdapter(OSAdapter):
         return False
 
     def is_foreground(self, rect: dict) -> bool:
-        hwnd = rect.get("id")
-        if not hwnd:
+        current = self.validate_window(rect)
+        if not current:
             return False
+        hwnd = current["id"]
         try:
             import ctypes
             return ctypes.windll.user32.GetForegroundWindow() == hwnd
@@ -304,13 +449,22 @@ class WindowsAdapter(OSAdapter):
             win = self._find_window(title_keyword, exact)
             if not win:
                 return None
-            return {
-                "x": win.left,
-                "y": win.top,
-                "w": win.width,
-                "h": win.height,
-                "id": getattr(win, "_hWnd", None),
-            }
+            result = win.ref.as_dict()
+            expected_process = None
+            if title_keyword == "GlobalProtect":
+                expected_process = "PanGPA.exe"
+            elif title_keyword.startswith("Symantec Privileged Access Manager"):
+                expected_process = "CAPAMClient.exe"
+            elif title_keyword in ("RDP-211.200", "Terminal-211.12"):
+                expected_process = "CAPAMClient.exe"
+            if expected_process and result["process_name"].lower() != expected_process.lower():
+                self._diag(
+                    "window_rejected", title=title_keyword,
+                    expected_process=expected_process, actual_process=result["process_name"],
+                )
+                return None
+            self._diag("window_discovered", query=title_keyword, exact=exact, window=result)
+            return result
         except Exception:
             return None
 
@@ -318,12 +472,7 @@ class WindowsAdapter(OSAdapter):
         """Choose unowned exact-title CAPAM window; dialogs have an owner HWND."""
         try:
             import ctypes
-            import pygetwindow as gw
-            windows = [
-                window for window in gw.getWindowsWithTitle("Symantec Privileged Access Manager")
-                if window.title == "Symantec Privileged Access Manager"
-                and window.width > 0 and window.height > 0
-            ]
+            windows = self._window_candidates("Symantec Privileged Access Manager", exact=True)
             if not windows:
                 return None
             unowned = [
@@ -332,14 +481,14 @@ class WindowsAdapter(OSAdapter):
             ]
             if not unowned:
                 return None
+            unowned = [
+                window for window in unowned
+                if window.ref.identity.process_name.lower() == "capamclient.exe"
+            ]
+            if not unowned:
+                return None
             window = max(unowned, key=lambda item: item.width * item.height)
-            return {
-                "x": window.left,
-                "y": window.top,
-                "w": window.width,
-                "h": window.height,
-                "id": getattr(window, "_hWnd", None),
-            }
+            return window.ref.as_dict()
         except Exception:
             return None
 
@@ -347,64 +496,69 @@ class WindowsAdapter(OSAdapter):
         """Choose owned exact-title CAPAM authentication dialog."""
         try:
             import ctypes
-            import pygetwindow as gw
-            windows = [
-                window for window in gw.getWindowsWithTitle("Symantec Privileged Access Manager")
-                if window.title == "Symantec Privileged Access Manager"
-                and window.width > 0 and window.height > 0
-            ]
+            windows = self._window_candidates("Symantec Privileged Access Manager", exact=True)
             if not windows:
                 return None
             if len(windows) == 1:
                 window = windows[0]
-                return {
-                    "x": window.left,
-                    "y": window.top,
-                    "w": window.width,
-                    "h": window.height,
-                    "id": getattr(window, "_hWnd", None),
-                }
+                return None
             owned = [
                 window for window in windows
                 if ctypes.windll.user32.GetWindow(getattr(window, "_hWnd", 0), 4)  # GW_OWNER
+                and window.ref.identity.process_name.lower() == "capamclient.exe"
             ]
             if not owned:
                 return None
             window = min(owned, key=lambda item: item.width * item.height)
-            return {
-                "x": window.left,
-                "y": window.top,
-                "w": window.width,
-                "h": window.height,
-                "id": getattr(window, "_hWnd", None),
-            }
+            return window.ref.as_dict()
         except Exception:
             return None
 
     def get_window_rect_for_hwnd(self, hwnd) -> dict | None:
+        ref = self._window_ref(hwnd) if hwnd else None
+        return ref.as_dict() if ref else None
+
+    def get_capture_rect_for_hwnd(self, hwnd) -> dict | None:
+        """Return physical screen bounds represented by HWND ImageGrab pixels."""
         if not hwnd:
             return None
         try:
             import ctypes
-            rect = (ctypes.c_long * 4)()
-            if not ctypes.windll.user32.IsWindow(hwnd):
+
+            user32 = ctypes.windll.user32
+            if not user32.IsWindow(hwnd):
                 return None
-            if not ctypes.windll.user32.GetWindowRect(hwnd, rect):
+            client = (ctypes.c_long * 4)()
+            origin = (ctypes.c_long * 2)()
+            if not user32.GetClientRect(hwnd, client):
                 return None
-            return {
-                "x": rect[0],
-                "y": rect[1],
-                "w": rect[2] - rect[0],
-                "h": rect[3] - rect[1],
-                "id": hwnd,
-            }
+            if not user32.ClientToScreen(hwnd, origin):
+                return None
+            ref = self._window_ref(hwnd)
+            return {**ref.client.as_dict(), "id": hwnd} if ref else None
         except Exception:
             return None
 
+    def get_window_rects(self, title_keyword: str, exact: bool = False) -> list[dict]:
+        results = []
+        for window in self._window_candidates(title_keyword, exact=exact):
+            item = window.ref.as_dict()
+            expected_process = None
+            if title_keyword == "GlobalProtect":
+                expected_process = "PanGPA.exe"
+            elif title_keyword.startswith("Symantec Privileged Access Manager"):
+                expected_process = "CAPAMClient.exe"
+            elif title_keyword in ("RDP-211.200", "Terminal-211.12"):
+                expected_process = "CAPAMClient.exe"
+            if not expected_process or item["process_name"].lower() == expected_process.lower():
+                results.append(item)
+        return results
+
     def kill_window_process(self, rect: dict) -> bool:
-        hwnd = rect.get("id")
-        if not hwnd:
+        current = self.validate_window(rect)
+        if not current:
             return False
+        hwnd = current["id"]
         try:
             import ctypes
             pid = ctypes.c_ulong()
@@ -450,8 +604,6 @@ class WindowsAdapter(OSAdapter):
             return None
         try:
             image = ImageGrab.grab(window=hwnd, include_layered_windows=True).convert("RGB")
-            if image.size != (rect["w"], rect["h"]):
-                image = image.resize((rect["w"], rect["h"]))
             return np.asarray(image)[:, :, ::-1].copy()
         except Exception:
             return None
@@ -471,26 +623,57 @@ class WindowsAdapter(OSAdapter):
         except Exception:
             pass
 
-    def kill_capam(self) -> None:
-        creationflags = 0x08000000  # CREATE_NO_WINDOW
-        subprocess.run(
-            ["taskkill", "/F", "/IM", "CAPAMClient.exe"],
-            check=False,
-            creationflags=creationflags,
-        )
+    def is_capam_running(self) -> bool:
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq CAPAMClient.exe", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                text=True,
+                check=False,
+                creationflags=0x08000000,
+            )
+            return any(
+                line.strip().lower().startswith('"capamclient.exe"')
+                for line in result.stdout.splitlines()
+            )
+        except Exception:
+            return bool(self.get_window_rects("Symantec Privileged Access Manager"))
+
+    def kill_capam(self) -> bool:
+        try:
+            if not self.is_capam_running():
+                return True
+            return subprocess.run(
+                ["taskkill", "/F", "/T", "/IM", "CAPAMClient.exe"],
+                check=False,
+                creationflags=0x08000000,
+            ).returncode == 0
+        except Exception:
+            return False
 
     def find_capam_exe(self) -> str | None:
-        """Tìm đường dẫn thực thi CAPAMClient.exe theo thứ tự ưu tiên."""
-        # 1. Kiểm tra các đường dẫn cài đặt thông thường
-        for path in CAPAM_CANDIDATE_PATHS:
-            if os.path.exists(path):
-                return path
-        # 2. Tìm trong registry
-        registry_path = _find_capam_in_registry()
-        if registry_path:
-            return registry_path
-        # 3. Fallback: thử chạy từ PATH
-        return None
+        """Resolve verified absolute CAPAM executable from supported sources."""
+        result = discover("capam")
+        self.last_discovery["capam"] = result
+        self._diag(
+            "executable_discovered", product="capam", found=bool(result),
+            source=result.source if result else None,
+            executable_name=result.executable.name if result else None,
+            install_root_name=result.install_root.name if result else None,
+        )
+        return str(result.executable) if result else None
+
+    def find_gp_exe(self) -> str | None:
+        """Resolve absolute GlobalProtect UI executable from supported sources."""
+        result = discover("gp")
+        self.last_discovery["gp"] = result
+        self._diag(
+            "executable_discovered", product="globalprotect", found=bool(result),
+            source=result.source if result else None,
+            executable_name=result.executable.name if result else None,
+            install_root_name=result.install_root.name if result else None,
+        )
+        return str(result.executable) if result else None
 
     def launch_capam(self) -> bool:
         exe = self.find_capam_exe()
@@ -502,29 +685,195 @@ class WindowsAdapter(OSAdapter):
                 return True
             except Exception:
                 pass
-        # Thử trực tiếp từ PATH
+        return False
+
+    def launch_gp_ui(self) -> bool:
+        env = _get_clean_env()
+        gp_path = self.find_gp_exe()
+        if not gp_path:
+            return False
         try:
-            _launch_external(["CAPAMClient.exe"], env=env)
+            _launch_external([gp_path], env=env, cwd=os.path.dirname(gp_path))
             return True
         except Exception:
             return False
 
-    def launch_gp_ui(self) -> bool:
-        env = _get_clean_env()
-        for gp_path in GP_EXE_PATHS:
-            if os.path.exists(gp_path):
-                try:
-                    _launch_external([gp_path], env=env, cwd=os.path.dirname(gp_path))
-                    return True
-                except Exception:
-                    pass
+    def click_window_point(self, rect: dict, screen_x: int, screen_y: int) -> bool:
+        current = self.validate_window(rect)
+        if not current:
+            return False
         try:
-            _launch_external(["PanGPA.exe"], env=env)
+            import ctypes
+
+            hwnd = current["id"]
+            point = (ctypes.c_long * 2)(screen_x, screen_y)
+            if not ctypes.windll.user32.ScreenToClient(hwnd, point):
+                return False
+            if not (0 <= point[0] < current["client_rect"]["w"]):
+                return False
+            if not (0 <= point[1] < current["client_rect"]["h"]):
+                return False
+            lparam = (point[1] & 0xFFFF) << 16 | (point[0] & 0xFFFF)
+            user32 = ctypes.windll.user32
+            user32.SendMessageW(hwnd, 0x0200, 0, lparam)  # WM_MOUSEMOVE
+            user32.SendMessageW(hwnd, 0x0201, 0x0001, lparam)  # WM_LBUTTONDOWN
+            user32.SendMessageW(hwnd, 0x0202, 0, lparam)  # WM_LBUTTONUP
+            self._diag(
+                "window_direct_click",
+                hwnd=hwnd,
+                screen_x=screen_x,
+                screen_y=screen_y,
+                client_x=point[0],
+                client_y=point[1],
+            )
             return True
         except Exception:
             return False
+
+    def click_visible_window_point(self, rect: dict, screen_x: int, screen_y: int) -> bool:
+        """Temporarily raise exact HWND so another window cannot receive physical click."""
+        current = self.validate_window(rect)
+        if not current:
+            return False
+        hwnd = current["id"]
+        try:
+            import ctypes
+            import pyautogui
+
+            user32 = ctypes.windll.user32
+            class Point(ctypes.Structure):
+                _fields_ = (("x", ctypes.c_long), ("y", ctypes.c_long))
+
+            point = Point(screen_x, screen_y)
+            client_point = (ctypes.c_long * 2)(screen_x, screen_y)
+            if not user32.ScreenToClient(hwnd, client_point):
+                return False
+            client = current.get("client_rect", {})
+            if not (
+                0 <= client_point[0] < client.get("w", 0)
+                and 0 <= client_point[1] < client.get("h", 0)
+            ):
+                return False
+
+            flags = 0x0001 | 0x0002 | 0x0040  # SWP_NOSIZE | SWP_NOMOVE | SWP_SHOWWINDOW
+            hwnd_topmost = ctypes.c_void_p(-1 & ((1 << (ctypes.sizeof(ctypes.c_void_p) * 8)) - 1))
+            user32.SetWindowPos(hwnd, hwnd_topmost, 0, 0, 0, 0, flags)
+            if not _force_foreground(hwnd):
+                return False
+            user32.WindowFromPoint.restype = ctypes.c_void_p
+            owner = user32.WindowFromPoint(point)
+            if owner != hwnd and not user32.IsChild(hwnd, owner):
+                self._diag(
+                    "physical_click_blocked", hwnd=hwnd, point_owner=int(owner or 0),
+                    screen_x=screen_x, screen_y=screen_y,
+                )
+                return False
+            pyautogui.click(screen_x, screen_y)
+            self._diag(
+                "window_physical_click", hwnd=hwnd,
+                screen_x=screen_x, screen_y=screen_y,
+            )
+            return True
+        except Exception:
+            return False
+        finally:
+            try:
+                # Never leave CAPAM above user windows after click or failure.
+                hwnd_notopmost = ctypes.c_void_p(
+                    -2 & ((1 << (ctypes.sizeof(ctypes.c_void_p) * 8)) - 1)
+                )
+                ctypes.windll.user32.SetWindowPos(
+                    hwnd, hwnd_notopmost, 0, 0, 0, 0, 0x0001 | 0x0002
+                )
+            except Exception:
+                pass
+
+    def get_descendant_control_rect(self, rect: dict, control_id: int) -> dict | None:
+        current = self.validate_window(rect)
+        if not current:
+            return None
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            found = []
+            callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+            def visit(hwnd, _):
+                if user32.GetDlgCtrlID(hwnd) != control_id:
+                    return True
+                bounds = (ctypes.c_long * 4)()
+                if user32.IsWindowVisible(hwnd) and user32.IsWindowEnabled(hwnd) and user32.GetWindowRect(hwnd, bounds):
+                    found.append({
+                        "id": int(hwnd),
+                        "x": bounds[0],
+                        "y": bounds[1],
+                        "w": bounds[2] - bounds[0],
+                        "h": bounds[3] - bounds[1],
+                    })
+                return not found
+
+            callback = callback_type(visit)
+            user32.EnumChildWindows(current["id"], callback, 0)
+            return found[0] if found else None
+        except Exception:
+            return None
 
     def get_gp_log_path(self) -> str:
         return os.path.expanduser(
             r"~\AppData\Local\Palo Alto Networks\GlobalProtect\PanGPA.log"
         )
+
+    def get_rdp_windows(self) -> dict[int, str]:
+        """Return visible top-level HWNDs and titles owned by mstsc.exe."""
+        try:
+            import ctypes
+            import win32gui
+
+            kernel32 = ctypes.windll.kernel32
+            result = {}
+
+            def visit(hwnd, _):
+                if not win32gui.IsWindowVisible(hwnd):
+                    return
+                _, pid = __import__("win32process").GetWindowThreadProcessId(hwnd)
+                process = kernel32.OpenProcess(0x1000, False, pid)
+                if not process:
+                    return
+                try:
+                    buffer = ctypes.create_unicode_buffer(1024)
+                    size = ctypes.c_ulong(len(buffer))
+                    if kernel32.QueryFullProcessImageNameW(process, 0, buffer, ctypes.byref(size)):
+                        if os.path.basename(buffer.value).lower() == "mstsc.exe":
+                            result[int(hwnd)] = win32gui.GetWindowText(hwnd)
+                finally:
+                    kernel32.CloseHandle(process)
+
+            win32gui.EnumWindows(visit, None)
+            return result
+        except Exception:
+            return {}
+
+    def window_belongs_to_process(self, hwnd: int, process_name: str) -> bool:
+        if not hwnd:
+            return False
+        try:
+            import ctypes
+
+            pid = ctypes.c_ulong()
+            ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            process = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid.value)
+            if not process:
+                return False
+            try:
+                buffer = ctypes.create_unicode_buffer(1024)
+                size = ctypes.c_ulong(len(buffer))
+                if not ctypes.windll.kernel32.QueryFullProcessImageNameW(
+                    process, 0, buffer, ctypes.byref(size)
+                ):
+                    return False
+                return os.path.basename(buffer.value).lower() == process_name.lower()
+            finally:
+                ctypes.windll.kernel32.CloseHandle(process)
+        except Exception:
+            return False
