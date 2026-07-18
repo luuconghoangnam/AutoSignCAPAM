@@ -23,6 +23,7 @@ from capture.window_capture import FrameCapture
 from recognition.geometry import boxes_stable
 from vision.field_detector import detect_input_fields
 from config import write_text_safely
+from core.action_transaction import ActionTransaction
 from automation.java_access_bridge import CAPAMJAB, JABUnavailable
 
 
@@ -47,6 +48,7 @@ class CAPAMHandler:
             tempfile.gettempdir(), f"capam_crop_{os.getpid()}_{uuid.uuid4().hex}.png"
         )
         self._capture = FrameCapture(adapter)
+        self._actions = ActionTransaction()
         self._jab = None
         self._jab_failed = False
         self._jab_attempts = 0
@@ -285,6 +287,9 @@ class CAPAMHandler:
         if not fields:
             self._log("[Address] Không tìm thấy ô Address để nhập IP.")
             return False
+        if self._actions.is_committed("capam_connect", rect):
+            self._log("[Address] Connect đã gửi; chỉ chờ màn hình Login.")
+            return True
 
         jab = self._get_jab(rect)
         if jab and jab.has("combo box", "Address"):
@@ -295,6 +300,9 @@ class CAPAMHandler:
                     "Address", self.capam_ip,
                     target_active=lambda: self.adapter.is_foreground(rect),
                 )
+                if not self._actions.commit("capam_connect", rect):
+                    self._log("[Address] Connect đã gửi; không gửi lại.")
+                    return True
                 jab.click("Connect")
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline:
@@ -358,6 +366,9 @@ class CAPAMHandler:
         if not self.adapter.is_foreground(rect):
             self._log("[Address] Foreground đổi; không nhấn Enter.")
             return False
+        if not self._actions.commit("capam_connect", rect):
+            self._log("[Address] Connect đã gửi; không nhấn Enter lần hai.")
+            return True
         pyautogui.press("enter")
         self._log(
             f"Đã xóa và nhập lại IP '{self.capam_ip}', nhấn Enter trong ô Address. "
@@ -432,6 +443,9 @@ class CAPAMHandler:
         if len(fields) < 1:
             self._log("[Login] Không tìm thấy ô nhập liệu nào để điền thông tin CAPAM.")
             return False
+        if self._actions.is_committed("capam_login_submit", rect):
+            self._log("[Login] Login đã gửi; chỉ chờ Device List.")
+            return True
 
         jab = self._get_jab(rect)
         if jab and jab.has("text", "Username") and jab.has("password text", "Password"):
@@ -441,6 +455,9 @@ class CAPAMHandler:
                 active = lambda: self.adapter.is_foreground(rect)
                 jab.set_text("text", "Username", username, target_active=active)
                 jab.set_text("password text", "Password", password, target_active=active)
+                if not self._actions.commit("capam_login_submit", rect):
+                    self._log("[Login] Login đã gửi; không gửi lại.")
+                    return True
                 jab.click("Login")
                 deadline = time.monotonic() + 20
                 device_list_title = (
@@ -523,6 +540,9 @@ class CAPAMHandler:
             if not self.adapter.is_foreground(rect):
                 self._log("[Login] Foreground đổi; không gửi Enter.")
                 return False
+            if not self._actions.commit("capam_login_submit", rect):
+                self._log("[Login] Login đã gửi; không nhấn Enter lần hai.")
+                return True
             pyautogui.press("enter")
             self._log("[Login] Đã gửi thông tin đăng nhập CAPAM.")
             return True

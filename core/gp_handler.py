@@ -18,6 +18,7 @@ from adapters.base import OSAdapter
 from capture.window_capture import FrameCapture
 from vision.field_detector import detect_input_fields
 from config import GP_PORTAL_URL, write_text_safely
+from core.action_transaction import ActionTransaction
 
 
 
@@ -38,6 +39,7 @@ class GPHandler:
         self._cancelled = cancel_fn or (lambda: False)
         self._log_offset: int = 0
         self._capture = FrameCapture(adapter)
+        self._actions = ActionTransaction()
         self._screenshot_tmp = os.path.join(
             tempfile.gettempdir(), f"gp_crop_{os.getpid()}_{uuid.uuid4().hex}.png"
         )
@@ -206,6 +208,9 @@ class GPHandler:
 
     def enter_portal_url(self, rect: dict, fields: list) -> bool:
         """Điền URL portal vào ô nhập và nhấn Connect."""
+        if self._actions.is_committed("gp_portal_submit", rect):
+            self._log("[Portal] Portal submit đã gửi; chỉ chờ trạng thái tiếp theo.")
+            return True
         if not self.adapter.focus_rect(rect):
             self._log("[Portal] Không thể đưa đúng cửa sổ GlobalProtect lên foreground.")
             return False
@@ -244,12 +249,18 @@ class GPHandler:
         if not self.adapter.is_foreground(rect):
             self._log("[Portal] Foreground đổi trong lúc nhập; không nhấn Enter.")
             return False
+        if not self._actions.commit("gp_portal_submit", rect):
+            self._log("[Portal] Portal submit đã gửi; không gửi lại.")
+            return True
         pyautogui.press("enter")
         self._log(f"Đã nhập portal '{GP_PORTAL_URL}', chờ chuyển trang đăng nhập...")
         return True
 
     def enter_credentials(self, rect: dict, fields: list, username: str, password: str) -> bool:
         """Điền tài khoản và mật khẩu vào màn hình đăng nhập GP."""
+        if self._actions.is_committed("gp_credentials_submit", rect):
+            self._log("[Credentials] Submit đã gửi; không nhập credential lại.")
+            return True
         if not self.adapter.focus_rect(rect):
             self._log("[Credentials] Không thể đưa đúng cửa sổ GlobalProtect lên foreground.")
             return False
@@ -299,6 +310,9 @@ class GPHandler:
         if not self.adapter.is_foreground(rect):
             self._log("[Credentials] Foreground đã đổi; không gửi Enter.")
             return False
+        if not self._actions.commit("gp_credentials_submit", rect):
+            self._log("[Credentials] Submit đã gửi; không nhấn Enter lần hai.")
+            return True
         pyautogui.press("enter")
         return True
 
