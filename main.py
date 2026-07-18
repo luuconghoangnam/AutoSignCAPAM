@@ -5,10 +5,10 @@ Chỉ chứa logic khởi tạo tối thiểu: DPI setup, QApplication, MainWind
 Toàn bộ logic tự động hóa nằm trong các module core/, adapters/, vision/, ui/.
 """
 import sys
-from PyQt5.QtCore import QTimer
 # config.py tự setup DPI awareness khi import
 import config  # noqa: F401 — side-effect import
 
+from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtGui import QFont
 

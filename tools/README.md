@@ -106,3 +106,20 @@ python -m tools.probe_focus --exercise "CAPAM AutoSign" --duration 3
 ```
 
 `--exercise` only requests foreground for exact title and records which window takes focus back. It does not minimize, click, or type.
+
+## Runtime safety diagnostics
+
+Runtime window references now include exact HWND, PID, process creation time, executable, class, title, owner, outer rect and physical client rect. Timeline records discovery provenance, identity validation failures, focus results and elapsed timing without credential values.
+
+Executable discovery does not assume `C:` and does not run bare filenames. Sources, in priority order:
+
+- Existing trusted process image.
+- Vendor registry and App Paths in 32-bit/64-bit views.
+- Windows uninstall registry `InstallLocation`/`DisplayIcon`.
+- GlobalProtect `PanGPS` service install root.
+- Actual Program Files environment folders on any drive.
+- Supported per-user CAPAM layouts.
+
+Candidates must resolve to an existing regular file with exact expected executable name before launch.
+
+GlobalProtect callback handling does not modify portal policy or delete `gpwelcome.html`. When enabled, runtime closes only a foreground browser tab whose process is an approved browser and whose exact live title contains `GlobalProtect`. It revalidates the same HWND/PID/process immediately before `Ctrl+W`; unrelated browser tabs/windows are untouched.

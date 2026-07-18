@@ -982,6 +982,12 @@ Phase 1 da co implementation ban dau:
 - Windows HWND capture khong resize anh truoc recognition, tranh mat text/icon.
 - Build scripts da include `capture` va `recognition` packages.
 - Unit tests offline bao phu geometry, frame va capture contract.
+- Window identity pin them PID, process creation, executable, class, title va owner; stale/reused HWND bi reject.
+- CAPAM/GlobalProtect executable discovery dung running process, registry 32/64-bit, uninstall/App Paths, GP service va actual Program Files tren moi drive; khong launch bare filename.
+- GP/CAPAM/RDP vision dung physical client capture; capture bi reject neu identity/rect doi trong transaction.
+- AutoSign bo topmost va minimize trong run; browser callback chi minimize khi title/process correlation dung va duoc restore sau run.
+- GlobalProtect browser callback khong bi sua policy/file he thong; neu foreground la browser callback correlated voi title GlobalProtect, dong exact tab bang Ctrl+W va giu nguyen cac tab khac.
+- Windows Security chi chap nhan dialog moi sau RDP click, process CAPAM dung va unique; remote success dung exact `RDP-211.200`/`Terminal-211.12` + CAPAM process + new HWND.
 
 Chua xac minh:
 
