@@ -262,13 +262,20 @@ class RDPHandler:
                         if expected_session_title else None
                     ),
                 }
-                # CAPAM is Java Swing. WM_LBUTTON messages sent to its top-level
-                # HWND can report success without reaching the child control.
-                if not self.adapter.is_foreground(rect):
-                    self._log("Foreground đổi khi chuẩn bị click RDP; không click desktop.")
+                # CAPAM is Java Swing, so use a physical click. Adapter temporarily
+                # raises exact HWND and verifies WindowFromPoint before clicking.
+                if not self.adapter.click_visible_window_point(rect, click_x, click_y):
+                    self._log(
+                        "Không thể đưa CAPAM lên trên hoặc điểm RDP vẫn bị cửa sổ khác che; "
+                        "không gửi click."
+                    )
                     stable_count = 0
+                    previous_result = None
+                    previous_rect = None
+                    self._attempt_context = None
+                    rendered_at = time.monotonic()
+                    self._wait_next_poll(poll_started, deadline)
                     continue
-                pyautogui.click(click_x, click_y)
                 self._log("Đã gửi click chuột thật vào nút RDP.")
                 # Opening an RDP session is not idempotent. CAPAM may need several
                 # seconds to create its auth dialog, so never click this row twice.

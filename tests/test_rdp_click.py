@@ -34,6 +34,11 @@ class _ClickAdapter(_Adapter):
         "process_name": "CAPAMClient.exe",
     }
 
+    def __init__(self):
+        super().__init__()
+        self.click_allowed = True
+        self.physical_click_count = 0
+
     def get_window_rect_for_hwnd(self, hwnd):
         return self.rect.copy()
 
@@ -57,6 +62,12 @@ class _ClickAdapter(_Adapter):
 
     def get_rdp_windows(self):
         return {}
+
+    def click_visible_window_point(self, rect, screen_x, screen_y):
+        if not self.click_allowed:
+            return False
+        self.physical_click_count += 1
+        return True
 
 
 class RDPClickTests(unittest.TestCase):
@@ -99,13 +110,12 @@ class RDPClickTests(unittest.TestCase):
             }),
             patch("core.rdp_handler.time.monotonic", side_effect=monotonic),
             patch("core.rdp_handler.time.sleep", side_effect=sleep),
-            patch("core.rdp_handler.pyautogui.click") as click,
         ):
             self.assertFalse(
                 handler.click_rdp("200", "10.0.0.1", expected_rect=adapter.rect)
             )
 
-        click.assert_called_once()
+        self.assertEqual(adapter.physical_click_count, 1)
 
     def test_rdp_waits_for_slow_dialog_without_clicking_twice(self):
         adapter = _ClickAdapter()
@@ -136,14 +146,49 @@ class RDPClickTests(unittest.TestCase):
             }),
             patch("core.rdp_handler.time.monotonic", side_effect=monotonic),
             patch("core.rdp_handler.time.sleep", side_effect=sleep),
-            patch("core.rdp_handler.pyautogui.click") as click,
         ):
             self.assertTrue(
                 handler.click_rdp("200", "10.0.0.1", expected_rect=adapter.rect)
             )
 
-        click.assert_called_once()
+        self.assertEqual(adapter.physical_click_count, 1)
         self.assertGreaterEqual(clock[0], 8.0)
+
+    def test_blocked_point_never_counts_as_rdp_click(self):
+        adapter = _ClickAdapter()
+        adapter.click_allowed = False
+        handler = RDPHandler(adapter)
+        image = np.zeros((300, 400, 3), dtype=np.uint8)
+        snapshot = SimpleNamespace(
+            image=image,
+            rect=adapter.rect.copy(),
+            is_blank=False,
+            mean_delta=lambda previous: 0.0,
+        )
+        clock = [0.0]
+
+        def monotonic():
+            return clock[0]
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        with (
+            patch.object(handler._capture, "capture", return_value=snapshot),
+            patch("core.rdp_handler.find_device_rdp_button", return_value={
+                "point": (200, 150), "device_score": 0.9, "rdp_score": 0.9,
+            }),
+            patch("core.rdp_handler.time.monotonic", side_effect=monotonic),
+            patch("core.rdp_handler.time.sleep", side_effect=sleep),
+        ):
+            self.assertFalse(
+                handler.click_rdp(
+                    "200", "10.0.0.1", max_wait=2, expected_rect=adapter.rect
+                )
+            )
+
+        self.assertEqual(adapter.physical_click_count, 0)
+        self.assertIsNone(handler._attempt_context)
 
 
 if __name__ == "__main__":
