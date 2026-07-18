@@ -49,6 +49,7 @@ class AutomationWorker(QThread):
         self._gp_visual_fields = []
         self._gp_visual_rect = None
         self._gp_portal_submitted_at = 0.0
+        self._gp_credentials_announced = False
         self._capam_launched_early = False
         self._gp_submitted_rect = None
         self._device_list_rect = None
@@ -121,25 +122,41 @@ class AutomationWorker(QThread):
             self._log("Không tìm thấy cửa sổ GlobalProtect sau khi kích hoạt lại.")
             return "GP_DETECT"
 
-        # Đọc trạng thái từ log (toàn bộ lần đầu, sau đó chỉ log mới)
-        state = self._gp.read_state(read_all=(attempt == 1))
-        self._log(f"Trạng thái GP từ log: {state}")
+        # Chỉ đọc log phát sinh sau khi bắt đầu run, tránh dùng auth failure cũ.
+        state = self._gp.read_state(read_all=False)
 
-        # Fresh authentication failure is terminal. Visual fields remaining on
-        # screen must never override it and trigger a duplicate submission.
+        # Chỉ coi auth failure là terminal sau khi run này đã submit credentials.
+        # GP có thể phát lại lỗi của session trước khi đang mở form đăng nhập.
         if state == STATE_AUTH_FAILED:
-            return "GP_AUTH_FAILED"
+            self._log("Bỏ qua lỗi xác thực trước khi gửi credentials trong lượt chạy này.")
+            state = STATE_UNKNOWN
+        if state == STATE_CREDENTIALS and self._gp_portal_submitted_at > 0:
+            self._gp_credentials_announced = True
+        self._log(f"Trạng thái GP từ log: {state}")
 
         # Fallback sang OpenCV nếu log chưa phản ánh kịp
         fields = self._gp.detect_fields(rect)
-        self._log(f"OpenCV phát hiện {len(fields)} ô nhập liệu.")
-
-        # Xác định trạng thái màn hình dựa vào thực tế số lượng ô nhập nhận diện được trên UI
+        capture_rect = self._gp.last_capture_rect
         client = rect.get("client_rect", {})
+        self._log(
+            f"OpenCV phát hiện {len(fields)} ô nhập liệu; "
+            f"window={rect['w']}x{rect['h']}; "
+            f"client={client.get('w', rect['w'])}x{client.get('h', rect['h'])}; "
+            f"capture={capture_rect.get('w') if capture_rect else 0}x"
+            f"{capture_rect.get('h') if capture_rect else 0}; fields={fields}."
+        )
+
+        # Classifier and field boxes must use the same captured coordinate space.
+        frame_width = capture_rect.get("w", 0) if capture_rect else 0
+        frame_height = capture_rect.get("h", 0) if capture_rect else 0
         visual_state = self._gp.classify_fields(
             fields,
-            client.get("w", rect["w"]),
-            client.get("h", rect["h"]),
+            frame_width,
+            frame_height,
+            credentials_expected=(
+                self._gp_portal_submitted_at > 0
+                and self._gp_credentials_announced
+            ),
         )
         if visual_state == STATE_UNKNOWN:
             # Never type from stale log state without visual field confirmation.
@@ -151,17 +168,28 @@ class AutomationWorker(QThread):
             and visual_state != STATE_UNKNOWN
             and state != visual_state
         ):
-            self._log(
-                f"GP evidence mâu thuẫn: log={state}, visual={visual_state}; "
-                f"client={client.get('w', rect['w'])}x{client.get('h', rect['h'])}, "
-                f"fields={fields}; từ chối nhập và chờ frame/log mới."
+            direct_credentials = (
+                self._gp_portal_submitted_at == 0
+                and visual_state == STATE_CREDENTIALS
             )
-            self._gp_visual_state = STATE_UNKNOWN
-            self._gp_visual_count = 0
-            self._gp_visual_fields = []
-            self._gp_visual_rect = None
-            time.sleep(0.5)
-            return "GP_DETECT"
+            if direct_credentials:
+                self._log(
+                    "GP mở thẳng màn hình credentials; ưu tiên hình học cửa sổ "
+                    "thay cho trạng thái Portal cũ trong log."
+                )
+                state = STATE_UNKNOWN
+            else:
+                self._log(
+                    f"GP evidence mâu thuẫn: log={state}, visual={visual_state}; "
+                    f"client={client.get('w', rect['w'])}x{client.get('h', rect['h'])}, "
+                    f"fields={fields}; từ chối nhập và chờ frame/log mới."
+                )
+                self._gp_visual_state = STATE_UNKNOWN
+                self._gp_visual_count = 0
+                self._gp_visual_fields = []
+                self._gp_visual_rect = None
+                time.sleep(0.5)
+                return "GP_DETECT"
 
         if visual_state != STATE_UNKNOWN:
             unchanged = (
@@ -171,14 +199,10 @@ class AutomationWorker(QThread):
                 and boxes_stable(
                     self._gp_visual_fields,
                     fields,
-                    rect.get("client_rect", {}).get("w", rect["w"]),
-                    rect.get("client_rect", {}).get("h", rect["h"]),
-                    previous_width=self._gp_visual_rect.get("client_rect", {}).get(
-                        "w", self._gp_visual_rect["w"]
-                    ),
-                    previous_height=self._gp_visual_rect.get("client_rect", {}).get(
-                        "h", self._gp_visual_rect["h"]
-                    ),
+                    frame_width,
+                    frame_height,
+                    previous_width=self._gp_visual_rect.get("capture_w", 0),
+                    previous_height=self._gp_visual_rect.get("capture_h", 0),
                 )
             )
             if unchanged:
@@ -188,6 +212,8 @@ class AutomationWorker(QThread):
                 self._gp_visual_count = 1
             self._gp_visual_fields = list(fields)
             self._gp_visual_rect = rect.copy()
+            self._gp_visual_rect["capture_w"] = frame_width
+            self._gp_visual_rect["capture_h"] = frame_height
             if self._gp_visual_count < 2:
                 self._log(f"Màn hình GP {visual_state} cần thêm 1 frame xác nhận.")
                 time.sleep(0.5)
@@ -233,9 +259,6 @@ class AutomationWorker(QThread):
         elif state == STATE_CONNECTED:
             self._log("GlobalProtect đã kết nối thành công từ trước.")
             return "CAPAM_LAUNCH"
-
-        elif state == STATE_AUTH_FAILED:
-            return "GP_AUTH_FAILED"
 
         time.sleep(0.5)
         return "GP_DETECT"

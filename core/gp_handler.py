@@ -40,6 +40,7 @@ class GPHandler:
         self._log_offset: int = 0
         self._capture = FrameCapture(adapter)
         self._actions = ActionTransaction()
+        self._last_capture_rect: dict | None = None
         self._screenshot_tmp = os.path.join(
             tempfile.gettempdir(), f"gp_crop_{os.getpid()}_{uuid.uuid4().hex}.png"
         )
@@ -165,9 +166,11 @@ class GPHandler:
 
     def detect_fields(self, rect: dict) -> list:
         """Chụp cửa sổ GP và phát hiện các ô nhập liệu bằng OpenCV."""
+        self._last_capture_rect = None
         snapshot = self._capture.capture(rect)
         if not snapshot or snapshot.is_blank:
             return []
+        self._last_capture_rect = snapshot.rect.copy()
         try:
             import cv2
 
@@ -185,13 +188,29 @@ class GPHandler:
             pass
         return fields
 
+    @property
+    def last_capture_rect(self) -> dict | None:
+        return self._last_capture_rect.copy() if self._last_capture_rect else None
+
     @staticmethod
-    def classify_fields(fields: list, width: int, height: int) -> str:
+    def classify_fields(
+        fields: list,
+        width: int,
+        height: int,
+        credentials_expected: bool = False,
+    ) -> str:
         """Classify calibrated GP geometry; reject count-only false positives."""
         if width <= 0 or height <= 0:
             return STATE_UNKNOWN
         if len(fields) == 1:
             x, y, w, h = fields[0]
+            credentials_layout = height / width >= 1.44
+            if (
+                (credentials_expected or credentials_layout)
+                and w / width >= 0.5
+                and h / height >= 0.04
+            ):
+                return STATE_CREDENTIALS
             if w / width >= 0.5 and h / height >= 0.04 and y / height >= 0.65:
                 return STATE_PORTAL
             return STATE_UNKNOWN
@@ -216,13 +235,12 @@ class GPHandler:
             return False
         current_rect = self.adapter.get_window_rect_for_hwnd(rect.get("id"))
         if not current_rect or any(
-            rect.get(key) != current_rect.get(key) for key in ("id", "w", "h")
+            rect.get(key) != current_rect.get(key) for key in ("id", "x", "y", "w", "h")
         ):
             self._log("[Portal] Cửa sổ GlobalProtect đã thay đổi; bỏ tọa độ cũ.")
             return False
         rect = current_rect
-        get_capture_rect = getattr(self.adapter, "get_capture_rect_for_hwnd", None)
-        image_rect = get_capture_rect(rect.get("id")) if get_capture_rect else None
+        image_rect = self._last_capture_rect if fields else None
         image_rect = image_rect or rect
         if fields:
             x0, y0, w0, h0 = fields[0]
@@ -266,37 +284,79 @@ class GPHandler:
             return False
         current_rect = self.adapter.get_window_rect_for_hwnd(rect.get("id"))
         if not current_rect or any(
-            rect.get(key) != current_rect.get(key) for key in ("id", "w", "h")
+            rect.get(key) != current_rect.get(key) for key in ("id", "x", "y", "w", "h")
         ):
             self._log("[Credentials] Cửa sổ GlobalProtect đã thay đổi; bỏ tọa độ cũ.")
             return False
         rect = current_rect
-        get_capture_rect = getattr(self.adapter, "get_capture_rect_for_hwnd", None)
-        image_rect = get_capture_rect(rect.get("id")) if get_capture_rect else None
+        image_rect = self._last_capture_rect if fields else None
         image_rect = image_rect or rect
-        if len(fields) >= 2:
-            x0, y0, w0, h0 = fields[0]
+        get_control_rect = getattr(self.adapter, "get_descendant_control_rect", None)
+        username_control = get_control_rect(rect, 1166) if get_control_rect else None
+        password_control = get_control_rect(rect, 1167) if get_control_rect else None
+        if username_control and password_control:
+            click_x0 = username_control["x"] + username_control["w"] // 2
+            click_y0 = username_control["y"] + username_control["h"] // 2
+            click_x1 = password_control["x"] + password_control["w"] // 2
+            click_y1 = password_control["y"] + password_control["h"] // 2
+            self._log(
+                "[Credentials] Dùng Win32 control ID 1166/1167 để click trực tiếp "
+                "username/password."
+            )
+        elif len(fields) == 1:
+            x1, y1, w1, h1 = fields[0]
+            click_x1 = image_rect["x"] + x1 + w1 // 2
+            click_y1 = image_rect["y"] + y1 + h1 // 2
+            click_x0 = click_x1
+            click_y0 = click_y1 - int(h1 * 1.55)
+            self._log(
+                "[Credentials] Dùng ô password làm mốc; click trực tiếp username "
+                "phía trên rồi điền lại cả hai ô."
+            )
+        elif len(fields) >= 2:
+            ordered_fields = sorted(fields, key=lambda item: (item[1], item[0]))
+            x0, y0, w0, h0 = ordered_fields[0]
             click_x0 = image_rect["x"] + x0 + w0 // 2
             click_y0 = image_rect["y"] + y0 + h0 // 2
-            x1, y1, w1, h1 = fields[1]
+            x1, y1, w1, h1 = ordered_fields[1]
             click_x1 = image_rect["x"] + x1 + w1 // 2
             click_y1 = image_rect["y"] + y1 + h1 // 2
         else:
+            self._log("[Credentials] Không thấy ô visible; dùng tọa độ chuẩn và điền lại cả hai ô.")
             click_x0 = rect["x"] + int(rect["w"] * 0.5)
             click_y0 = rect["y"] + int(rect["h"] * 0.59)
             click_x1 = rect["x"] + int(rect["w"] * 0.5)
             click_y1 = rect["y"] + int(rect["h"] * 0.69)
 
-        pyautogui.click(click_x0, click_y0)
-        time.sleep(0.1)
+        client = rect.get("client_rect") or image_rect
+        client_right = client["x"] + client["w"]
+        client_bottom = client["y"] + client["h"]
+        points_inside = all(
+            client["x"] <= x < client_right and client["y"] <= y < client_bottom
+            for x, y in ((click_x0, click_y0), (click_x1, click_y1))
+        )
+        self._log(
+            f"[Credentials] capture={image_rect['x']},{image_rect['y']},"
+            f"{image_rect['w']}x{image_rect['h']}; fields={fields}; "
+            f"username_point=({click_x0},{click_y0}); "
+            f"password_point=({click_x1},{click_y1})"
+        )
+        if not points_inside:
+            self._log("[Credentials] Điểm click nằm ngoài client; từ chối nhập credentials.")
+            return False
+
+        pyautogui.moveTo(click_x0, click_y0, duration=0.25)
+        pyautogui.click()
+        time.sleep(0.4)
         if not self.adapter.is_foreground(rect):
             return False
         pyautogui.hotkey("ctrl", "a")
         pyautogui.press("backspace")
         if not write_text_safely(username, lambda: self.adapter.is_foreground(rect)):
             return False
-        pyautogui.click(click_x1, click_y1)
-        time.sleep(0.1)
+        pyautogui.moveTo(click_x1, click_y1, duration=0.25)
+        pyautogui.click()
+        time.sleep(0.4)
         if not self.adapter.is_foreground(rect):
             return False
         pyautogui.hotkey("ctrl", "a")
