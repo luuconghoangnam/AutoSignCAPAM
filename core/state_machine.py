@@ -4,6 +4,7 @@ core/state_machine.py — FSM điều phối toàn bộ luồng tự động hó
 Mỗi state tách riêng và trả về state tiếp theo.
 """
 import os
+import hashlib
 import time
 import uuid
 
@@ -14,6 +15,7 @@ from core.gp_handler import GPHandler, STATE_PORTAL, STATE_CREDENTIALS, STATE_CO
 from core.capam_handler import CAPAMHandler
 from core.rdp_handler import RDPHandler
 from diagnostics.timeline import TimelineWriter
+from recognition.geometry import boxes_stable
 
 
 class AutomationWorker(QThread):
@@ -34,6 +36,7 @@ class AutomationWorker(QThread):
         self.suppress_browser_foreground = suppress_browser_foreground
 
         self._adapter = get_os_adapter()
+        self._adapter.set_browser_callback_suppression(suppress_browser_foreground)
         self._gp = GPHandler(self._adapter, log_fn=self._log, cancel_fn=self.isInterruptionRequested)
         self._capam = CAPAMHandler(
             self._adapter, capam_ip, log_fn=self._log, cancel_fn=self.isInterruptionRequested
@@ -43,6 +46,8 @@ class AutomationWorker(QThread):
         )
         self._gp_visual_state = STATE_UNKNOWN
         self._gp_visual_count = 0
+        self._gp_visual_fields = []
+        self._gp_visual_rect = None
         self._gp_portal_submitted_at = 0.0
         self._capam_launched_early = False
         self._gp_submitted_rect = None
@@ -56,6 +61,10 @@ class AutomationWorker(QThread):
                 secrets=(username, password_prefix, otp, password_prefix + otp),
             )
             if timeline_path else None
+        )
+        self._adapter.set_diagnostic_fn(
+            (lambda event, **data: self._timeline.emit(event, **data))
+            if self._timeline else None
         )
 
     def _log(self, msg: str) -> None:
@@ -117,27 +126,68 @@ class AutomationWorker(QThread):
         state = self._gp.read_state(read_all=(attempt == 1))
         self._log(f"Trạng thái GP từ log: {state}")
 
+        # Fresh authentication failure is terminal. Visual fields remaining on
+        # screen must never override it and trigger a duplicate submission.
+        if state == STATE_AUTH_FAILED:
+            return "GP_AUTH_FAILED"
+
         # Fallback sang OpenCV nếu log chưa phản ánh kịp
         fields = self._gp.detect_fields(rect)
         self._log(f"OpenCV phát hiện {len(fields)} ô nhập liệu.")
 
         # Xác định trạng thái màn hình dựa vào thực tế số lượng ô nhập nhận diện được trên UI
-        if len(fields) == 1:
-            visual_state = STATE_PORTAL
-        elif len(fields) >= 2:
-            visual_state = STATE_CREDENTIALS
-        else:
-            visual_state = STATE_UNKNOWN
+        client = rect.get("client_rect", {})
+        visual_state = self._gp.classify_fields(
+            fields,
+            client.get("w", rect["w"]),
+            client.get("h", rect["h"]),
+        )
+        if visual_state == STATE_UNKNOWN:
             # Never type from stale log state without visual field confirmation.
             if state not in (STATE_CONNECTED, STATE_AUTH_FAILED) or attempt == 1:
                 state = STATE_UNKNOWN
 
+        if (
+            state in (STATE_PORTAL, STATE_CREDENTIALS)
+            and visual_state != STATE_UNKNOWN
+            and state != visual_state
+        ):
+            self._log(
+                f"GP evidence mâu thuẫn: log={state}, visual={visual_state}; "
+                "từ chối nhập và chờ frame/log mới."
+            )
+            self._gp_visual_state = STATE_UNKNOWN
+            self._gp_visual_count = 0
+            self._gp_visual_fields = []
+            self._gp_visual_rect = None
+            time.sleep(0.5)
+            return "GP_DETECT"
+
         if visual_state != STATE_UNKNOWN:
-            if visual_state == self._gp_visual_state:
+            unchanged = (
+                visual_state == self._gp_visual_state
+                and self._gp_visual_rect
+                and rect.get("id") == self._gp_visual_rect.get("id")
+                and boxes_stable(
+                    self._gp_visual_fields,
+                    fields,
+                    rect.get("client_rect", {}).get("w", rect["w"]),
+                    rect.get("client_rect", {}).get("h", rect["h"]),
+                    previous_width=self._gp_visual_rect.get("client_rect", {}).get(
+                        "w", self._gp_visual_rect["w"]
+                    ),
+                    previous_height=self._gp_visual_rect.get("client_rect", {}).get(
+                        "h", self._gp_visual_rect["h"]
+                    ),
+                )
+            )
+            if unchanged:
                 self._gp_visual_count += 1
             else:
                 self._gp_visual_state = visual_state
                 self._gp_visual_count = 1
+            self._gp_visual_fields = list(fields)
+            self._gp_visual_rect = rect.copy()
             if self._gp_visual_count < 2:
                 self._log(f"Màn hình GP {visual_state} cần thêm 1 frame xác nhận.")
                 time.sleep(0.5)
@@ -146,6 +196,8 @@ class AutomationWorker(QThread):
         else:
             self._gp_visual_state = STATE_UNKNOWN
             self._gp_visual_count = 0
+            self._gp_visual_fields = []
+            self._gp_visual_rect = None
 
         if state == STATE_PORTAL:
             now = time.monotonic()
@@ -234,7 +286,7 @@ class AutomationWorker(QThread):
             return "ERROR"
         self._log("Đang chờ browser thông báo VPN nhả foreground và kích hoạt CAPAM...")
         if self.suppress_browser_foreground and self._adapter.suppress_browser_foreground():
-            self._log("Đã thu nhỏ browser callback của GlobalProtect.")
+            self._log("Đã đóng tab callback GlobalProtect đang chiếm foreground.")
         if not self._adapter.wait_focus_rect(capam_rect, timeout=8.0):
             self._log("Lỗi: Không thể đưa đúng cửa sổ CAPAM lên foreground sau 8 giây.")
             return "ERROR"
@@ -314,12 +366,24 @@ class AutomationWorker(QThread):
         try:
             state = "RESET_CAPAM"
             gp_attempts = 0
+            gp_detect_deadline = None
             if self._timeline:
+                source_files = (
+                    __file__,
+                    os.path.join(os.path.dirname(__file__), "gp_handler.py"),
+                )
+                source_hash = hashlib.sha256()
+                for source_file in source_files:
+                    with open(source_file, "rb") as stream:
+                        source_hash.update(stream.read())
                 self._timeline.emit(
                     "run_started",
                     state=state,
                     server_choice=self.server_choice,
                     capam_ip=self.capam_ip,
+                    suppress_browser_foreground=self.suppress_browser_foreground,
+                    runtime_code_hash=source_hash.hexdigest()[:16],
+                    process_id=os.getpid(),
                 )
 
             while True:
@@ -338,10 +402,13 @@ class AutomationWorker(QThread):
 
                 elif state == "GP_START":
                     state = self._state_gp_start()
+                    if state == "GP_DETECT":
+                        gp_detect_deadline = time.monotonic() + 30
 
                 elif state == "GP_DETECT":
                     gp_attempts += 1
-                    if gp_attempts > 60:
+                    gp_detect_deadline = gp_detect_deadline or time.monotonic() + 30
+                    if time.monotonic() >= gp_detect_deadline:
                         self._log("Không nhận diện được GlobalProtect trong 30 giây. Dừng lại.")
                         self.finished_signal.emit(False)
                         return
@@ -403,6 +470,7 @@ class AutomationWorker(QThread):
             return
         finally:
             self._capam.close()
+            self._adapter.restore_suppressed_windows()
             if self._timeline:
                 terminal_state = locals().get("state", "NOT_STARTED")
                 self._timeline.emit(

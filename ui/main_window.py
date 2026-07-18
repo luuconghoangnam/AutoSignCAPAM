@@ -234,7 +234,7 @@ class MainWindow(QMainWindow):
         self.chk_auto_exit.setChecked(True)
         layout.addWidget(self.chk_auto_exit)
 
-        self.chk_block_browser = QCheckBox("Chặn trình duyệt chiếm focus sau khi VPN kết nối")
+        self.chk_block_browser = QCheckBox("Đóng tab callback GlobalProtect khi nó chiếm focus")
         self.chk_block_browser.setChecked(True)
         layout.addWidget(self.chk_block_browser)
 

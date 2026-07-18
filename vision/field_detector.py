@@ -43,7 +43,9 @@ def detect_input_fields(
     image_h, image_w = img.shape[:2]
     # Controls scale with DPI. Absolute pixel thresholds reject 125%/150% frames.
     ratio_limits = {
-        "gp": (0.25, 0.9, 0.015, 0.18),
+        # Real GP editable controls span most of the 287px client width.
+        # Narrow text glyph contours inside a field must not become controls.
+        "gp": (0.50, 0.9, 0.04, 0.18),
         "capam": (0.08, 0.85, 0.008, 0.18),
         "windows_security": (0.08, 0.9, 0.008, 0.18),
     }
@@ -96,8 +98,13 @@ def _deduplicate_fields(fields: list[tuple[int, int, int, int]], threshold: int 
         is_duplicate = False
         for k in kept:
             kx, ky, kw, kh = k
+            contained = (
+                x >= kx and y >= ky
+                and x + w <= kx + kw
+                and y + h <= ky + kh
+            )
             # Nếu tọa độ x, y của ô đang xét quá gần với ô đã giữ lại, coi như cùng 1 ô
-            if abs(x - kx) < threshold and abs(y - ky) < threshold:
+            if contained or (abs(x - kx) < threshold and abs(y - ky) < threshold):
                 is_duplicate = True
                 break
         if not is_duplicate:

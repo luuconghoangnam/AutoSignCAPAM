@@ -183,6 +183,27 @@ class GPHandler:
             pass
         return fields
 
+    @staticmethod
+    def classify_fields(fields: list, width: int, height: int) -> str:
+        """Classify calibrated GP geometry; reject count-only false positives."""
+        if width <= 0 or height <= 0:
+            return STATE_UNKNOWN
+        if len(fields) == 1:
+            x, y, w, h = fields[0]
+            if w / width >= 0.5 and h / height >= 0.04 and y / height >= 0.65:
+                return STATE_PORTAL
+            return STATE_UNKNOWN
+        if len(fields) == 2:
+            first, second = sorted(fields, key=lambda item: item[1])
+            x0, y0, w0, h0 = first
+            x1, y1, w1, h1 = second
+            aligned = abs(x0 - x1) / width <= 0.05 and abs(w0 - w1) / width <= 0.08
+            ordered = 0.04 <= (y1 - y0) / height <= 0.25
+            practical = min(w0, w1) / width >= 0.5 and min(h0, h1) / height >= 0.04
+            if aligned and ordered and practical:
+                return STATE_CREDENTIALS
+        return STATE_UNKNOWN
+
     def enter_portal_url(self, rect: dict, fields: list) -> bool:
         """Điền URL portal vào ô nhập và nhấn Connect."""
         if not self.adapter.focus_rect(rect):
