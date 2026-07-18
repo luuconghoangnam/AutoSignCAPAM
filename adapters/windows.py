@@ -450,8 +450,6 @@ class WindowsAdapter(OSAdapter):
             return None
         try:
             image = ImageGrab.grab(window=hwnd, include_layered_windows=True).convert("RGB")
-            if image.size != (rect["w"], rect["h"]):
-                image = image.resize((rect["w"], rect["h"]))
             return np.asarray(image)[:, :, ::-1].copy()
         except Exception:
             return None

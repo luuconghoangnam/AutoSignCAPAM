@@ -38,7 +38,6 @@ gp_state_detector.py
 list_tray_items.py
 activate_gp_ui.py
 take_screenshot.py
-test_*.py
 verify_templates.py
 crop_templates.py
 investigation_report.md

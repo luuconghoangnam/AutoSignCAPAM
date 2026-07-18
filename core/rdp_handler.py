@@ -10,6 +10,9 @@ import cv2
 import pyautogui
 
 from adapters.base import OSAdapter
+from capture.frame import FrameSnapshot
+from capture.window_capture import FrameCapture
+from recognition.geometry import points_stable, to_screen_point
 from vision.template_matcher import find_device_rdp_button
 from config import write_text_safely
 
@@ -26,6 +29,7 @@ class RDPHandler:
         self.adapter = adapter
         self._log = log_fn or (lambda msg: None)
         self._cancelled = cancel_fn or (lambda: False)
+        self._capture = FrameCapture(adapter)
         run_id = f"{os.getpid()}_{uuid.uuid4().hex}"
         self._screenshot_tmp = os.path.join(tempfile.gettempdir(), f"capam_window_{run_id}.png")
 
@@ -34,18 +38,6 @@ class RDPHandler:
         remaining = min(deadline, poll_started + _POLL_INTERVAL) - time.monotonic()
         if remaining > 0:
             time.sleep(remaining)
-
-    @staticmethod
-    def _same_fields(previous: list, current: list, tolerance: int = 8) -> bool:
-        if len(previous) != len(current):
-            return False
-        return all(
-            abs(old[0] - new[0]) <= tolerance
-            and abs(old[1] - new[1]) <= tolerance
-            and abs(old[2] - new[2]) <= tolerance
-            and abs(old[3] - new[3]) <= tolerance
-            for old, new in zip(previous, current)
-        )
 
     @staticmethod
     def _same_rect(previous: dict | None, current: dict) -> bool:
@@ -94,7 +86,7 @@ class RDPHandler:
         focused_once = False
         rendered_at = None
         match_misses = 0
-        previous_scene = None
+        previous_snapshot = None
         while time.monotonic() < deadline:
             if self._cancelled():
                 return False
@@ -125,7 +117,8 @@ class RDPHandler:
                 self.adapter.refresh_window(rect)
                 time.sleep(0.25)
                 focused_once = True
-            scene = self.adapter.capture_window(rect)
+            snapshot = self._capture.capture(rect)
+            scene = snapshot.image if snapshot else None
             if scene is None:
                 try:
                     self.adapter.take_screenshot(rect, self._screenshot_tmp)
@@ -143,20 +136,16 @@ class RDPHandler:
                 self._wait_next_poll(poll_started, deadline)
                 continue
 
-            frame_std = float(scene.std())
-            if frame_std < 3.0:
+            snapshot = snapshot or FrameSnapshot.from_image(scene, rect)
+            if snapshot.is_blank:
                 self._log("Ảnh CAPAM chưa render hoặc đang bị che; yêu cầu vẽ lại...")
                 self.adapter.refresh_window(rect)
                 focused_once = False
                 self._wait_next_poll(poll_started, deadline)
                 continue
 
-            frame_delta = (
-                float(cv2.absdiff(scene, previous_scene).mean())
-                if previous_scene is not None and previous_scene.shape == scene.shape
-                else 255.0
-            )
-            previous_scene = scene
+            frame_delta = snapshot.mean_delta(previous_snapshot)
+            previous_snapshot = snapshot
             if frame_delta > 18.0:
                 self._log("CAPAM đang cập nhật danh sách; chờ frame ổn định...")
                 self._wait_next_poll(poll_started, deadline)
@@ -190,9 +179,12 @@ class RDPHandler:
                 match_misses = 0
                 unchanged = (
                     self._same_rect(previous_rect, rect)
-                    and previous_result is not None
-                    and abs(previous_result[0] - point[0]) <= 8
-                    and abs(previous_result[1] - point[1]) <= 8
+                    and points_stable(
+                        previous_result,
+                        point,
+                        scene.shape[1],
+                        scene.shape[0],
+                    )
                 )
                 stable_count = stable_count + 1 if unchanged else 1
                 previous_result = point
@@ -215,8 +207,12 @@ class RDPHandler:
                     previous_result = None
                     previous_rect = None
                     continue
-                click_x = rect["x"] + point[0]
-                click_y = rect["y"] + point[1]
+                click_x, click_y = to_screen_point(
+                    point,
+                    scene.shape[1],
+                    scene.shape[0],
+                    rect,
+                )
                 self._log(f"Đang click nút RDP tại ({click_x}, {click_y})...")
                 if not self.adapter.is_foreground(rect):
                     self._log("Foreground đổi trước click RDP; hủy click.")

@@ -48,6 +48,11 @@ python3 -m PyInstaller --noconsole --onefile \
     --hidden-import "core.rdp_handler" \
     --hidden-import "vision.field_detector" \
     --hidden-import "vision.template_matcher" \
+    --hidden-import "capture" \
+    --hidden-import "capture.frame" \
+    --hidden-import "capture.window_capture" \
+    --hidden-import "recognition" \
+    --hidden-import "recognition.geometry" \
     --hidden-import "ui.main_window" \
     --name "CAPAM_AutoSign_Linux" \
     main.py

@@ -19,6 +19,7 @@ import pyautogui
 import cv2
 
 from adapters.base import OSAdapter
+from recognition.geometry import boxes_stable
 from vision.field_detector import detect_input_fields
 from config import write_text_safely
 from automation.java_access_bridge import CAPAMJAB, JABUnavailable
@@ -200,18 +201,6 @@ class CAPAMHandler:
         return [field for field in fields if field[2] >= min_width]
 
     @staticmethod
-    def _same_fields(previous: list, current: list, tolerance: int = 8) -> bool:
-        if len(previous) != len(current):
-            return False
-        return all(
-            abs(old[0] - new[0]) <= tolerance
-            and abs(old[1] - new[1]) <= tolerance
-            and abs(old[2] - new[2]) <= tolerance
-            and abs(old[3] - new[3]) <= tolerance
-            for old, new in zip(previous, current)
-        )
-
-    @staticmethod
     def _same_rect(previous: dict | None, current: dict) -> bool:
         if not previous:
             return False
@@ -247,7 +236,10 @@ class CAPAMHandler:
                 if ratio < 0.55 or (self._get_jab(rect) and self._get_jab(rect).has("combo box", "Address")):
                     fields = self._detect_address_field(rect)
                     if len(fields) >= 1:
-                        unchanged = self._same_rect(previous_rect, rect) and self._same_fields(previous_fields, fields)
+                        unchanged = (
+                            self._same_rect(previous_rect, rect)
+                            and boxes_stable(previous_fields, fields, rect["w"], rect["h"])
+                        )
                         stable_count = stable_count + 1 if unchanged else 1
                         previous_fields = fields
                         previous_rect = rect.copy()
@@ -384,7 +376,10 @@ class CAPAMHandler:
                             f"{raw_fields}; đang chờ frame ổn định tiếp theo."
                         )
                     if len(fields) >= 1:
-                        unchanged = self._same_rect(previous_rect, rect) and self._same_fields(previous_fields, fields)
+                        unchanged = (
+                            self._same_rect(previous_rect, rect)
+                            and boxes_stable(previous_fields, fields, rect["w"], rect["h"])
+                        )
                         stable_count = stable_count + 1 if unchanged else 1
                         previous_fields = fields
                         previous_rect = rect.copy()

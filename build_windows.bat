@@ -65,8 +65,13 @@ echo [4/5] Dong goi ung dung...
     --hidden-import "core.rdp_handler" ^
     --hidden-import "vision" ^
     --hidden-import "vision.field_detector" ^
-    --hidden-import "vision.template_matcher" ^
-    --hidden-import "automation.java_access_bridge" ^
+     --hidden-import "vision.template_matcher" ^
+     --hidden-import "capture" ^
+     --hidden-import "capture.frame" ^
+     --hidden-import "capture.window_capture" ^
+     --hidden-import "recognition" ^
+     --hidden-import "recognition.geometry" ^
+     --hidden-import "automation.java_access_bridge" ^
     --hidden-import "JABWrapper.jab_wrapper" ^
     --hidden-import "JABWrapper.context_tree" ^
     --hidden-import "ui" ^
