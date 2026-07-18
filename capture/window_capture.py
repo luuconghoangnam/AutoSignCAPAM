@@ -5,6 +5,15 @@ from capture.frame import FrameSnapshot
 from adapters.window_identity import identity_matches
 
 
+def _rect_for_image(current: dict, client: dict | None, image_w: int, image_h: int) -> dict:
+    """Choose screen origin whose dimensions best match captured HWND pixels."""
+    if not client:
+        return current.copy()
+    outer_error = abs(current.get("w", 0) - image_w) + abs(current.get("h", 0) - image_h)
+    client_error = abs(client.get("w", 0) - image_w) + abs(client.get("h", 0) - image_h)
+    return (current if outer_error <= client_error else client).copy()
+
+
 class FrameCapture:
     def __init__(self, adapter):
         self.adapter = adapter
@@ -22,8 +31,8 @@ class FrameCapture:
             return None
         image_h, image_w = image.shape[:2]
         get_capture_rect = getattr(self.adapter, "get_capture_rect_for_hwnd", None)
-        capture_rect = get_capture_rect(hwnd) if get_capture_rect and hwnd else None
-        capture_rect = capture_rect or current.copy()
+        client_rect = get_capture_rect(hwnd) if get_capture_rect and hwnd else None
+        capture_rect = _rect_for_image(current, client_rect, image_w, image_h)
         if capture_rect.get("id") != current.get("id"):
             return None
         if any(after.get(key) != current.get(key) for key in ("x", "y", "w", "h")):

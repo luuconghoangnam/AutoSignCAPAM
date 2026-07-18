@@ -730,6 +730,95 @@ class WindowsAdapter(OSAdapter):
         except Exception:
             return False
 
+    def click_visible_window_point(self, rect: dict, screen_x: int, screen_y: int) -> bool:
+        """Temporarily raise exact HWND so another window cannot receive physical click."""
+        current = self.validate_window(rect)
+        if not current:
+            return False
+        hwnd = current["id"]
+        try:
+            import ctypes
+            import pyautogui
+
+            user32 = ctypes.windll.user32
+            class Point(ctypes.Structure):
+                _fields_ = (("x", ctypes.c_long), ("y", ctypes.c_long))
+
+            point = Point(screen_x, screen_y)
+            client_point = (ctypes.c_long * 2)(screen_x, screen_y)
+            if not user32.ScreenToClient(hwnd, client_point):
+                return False
+            client = current.get("client_rect", {})
+            if not (
+                0 <= client_point[0] < client.get("w", 0)
+                and 0 <= client_point[1] < client.get("h", 0)
+            ):
+                return False
+
+            flags = 0x0001 | 0x0002 | 0x0040  # SWP_NOSIZE | SWP_NOMOVE | SWP_SHOWWINDOW
+            hwnd_topmost = ctypes.c_void_p(-1 & ((1 << (ctypes.sizeof(ctypes.c_void_p) * 8)) - 1))
+            user32.SetWindowPos(hwnd, hwnd_topmost, 0, 0, 0, 0, flags)
+            if not _force_foreground(hwnd):
+                return False
+            user32.WindowFromPoint.restype = ctypes.c_void_p
+            owner = user32.WindowFromPoint(point)
+            if owner != hwnd and not user32.IsChild(hwnd, owner):
+                self._diag(
+                    "physical_click_blocked", hwnd=hwnd, point_owner=int(owner or 0),
+                    screen_x=screen_x, screen_y=screen_y,
+                )
+                return False
+            pyautogui.click(screen_x, screen_y)
+            self._diag(
+                "window_physical_click", hwnd=hwnd,
+                screen_x=screen_x, screen_y=screen_y,
+            )
+            return True
+        except Exception:
+            return False
+        finally:
+            try:
+                # Never leave CAPAM above user windows after click or failure.
+                hwnd_notopmost = ctypes.c_void_p(
+                    -2 & ((1 << (ctypes.sizeof(ctypes.c_void_p) * 8)) - 1)
+                )
+                ctypes.windll.user32.SetWindowPos(
+                    hwnd, hwnd_notopmost, 0, 0, 0, 0, 0x0001 | 0x0002
+                )
+            except Exception:
+                pass
+
+    def get_descendant_control_rect(self, rect: dict, control_id: int) -> dict | None:
+        current = self.validate_window(rect)
+        if not current:
+            return None
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            found = []
+            callback_type = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+            def visit(hwnd, _):
+                if user32.GetDlgCtrlID(hwnd) != control_id:
+                    return True
+                bounds = (ctypes.c_long * 4)()
+                if user32.IsWindowVisible(hwnd) and user32.IsWindowEnabled(hwnd) and user32.GetWindowRect(hwnd, bounds):
+                    found.append({
+                        "id": int(hwnd),
+                        "x": bounds[0],
+                        "y": bounds[1],
+                        "w": bounds[2] - bounds[0],
+                        "h": bounds[3] - bounds[1],
+                    })
+                return not found
+
+            callback = callback_type(visit)
+            user32.EnumChildWindows(current["id"], callback, 0)
+            return found[0] if found else None
+        except Exception:
+            return None
+
     def get_gp_log_path(self) -> str:
         return os.path.expanduser(
             r"~\AppData\Local\Palo Alto Networks\GlobalProtect\PanGPA.log"

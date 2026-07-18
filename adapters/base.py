@@ -42,6 +42,14 @@ class OSAdapter:
         """Send a click to an exact window without depending on desktop z-order."""
         return False
 
+    def click_visible_window_point(self, rect: dict, screen_x: int, screen_y: int) -> bool:
+        """Raise exact window, verify point ownership, then issue a physical click."""
+        return False
+
+    def get_descendant_control_rect(self, rect: dict, control_id: int) -> dict | None:
+        """Return screen bounds for descendant Win32 control ID."""
+        return None
+
     def get_window_rect(self, title_keyword: str, exact: bool = False) -> dict | None:
         """Lấy vị trí và kích thước của cửa sổ.
 
