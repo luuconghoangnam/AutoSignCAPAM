@@ -3,6 +3,7 @@ import unittest
 import numpy as np
 
 from capture.window_capture import FrameCapture
+from adapters.window_identity import identity_matches
 
 
 class FakeAdapter:
@@ -47,6 +48,17 @@ class FrameCaptureTests(unittest.TestCase):
             current={"id": 8, "w": 10, "h": 10},
         )
         self.assertIsNone(FrameCapture(adapter).capture({"id": 7}))
+
+    def test_capture_rejects_changed_process_identity(self):
+        adapter = FakeAdapter(
+            image=np.zeros((10, 10, 3), dtype=np.uint8),
+            current={"id": 7, "pid": 22, "process_name": "other.exe", "w": 10, "h": 10},
+        )
+        self.assertIsNone(
+            FrameCapture(adapter).capture(
+                {"id": 7, "pid": 11, "process_name": "target.exe"}
+            )
+        )
 
 
 if __name__ == "__main__":

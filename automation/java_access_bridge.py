@@ -160,10 +160,11 @@ class CAPAMJAB:
             raise RuntimeError("Expected one editable combo child")
         return matches[0]
 
-    def set_text(self, role: str, name: str, value: str) -> None:
+    def set_text(self, role: str, name: str, value: str, target_active=None) -> None:
         def action(wrapper):
             node = self._find_node(wrapper, role, name)
             node.request_focus()
+            self._clear_node(node, target_active)
             node.insert_text(value)
 
         self._call(action)
@@ -180,13 +181,34 @@ class CAPAMJAB:
 
         return self._call(action)
 
-    def set_combo_text(self, name: str, value: str) -> None:
+    def set_combo_text(self, name: str, value: str, target_active=None) -> None:
         def action(wrapper):
             node = self._find_editable_child(wrapper, "combo box", name)
             node.request_focus()
+            self._clear_node(node, target_active)
             node.insert_text(value)
 
         self._call(action)
+
+    @staticmethod
+    def _clear_node(node, target_active=None) -> None:
+        """Clear semantic text before insert; reject append-only controls."""
+        for method_name in ("clear", "delete_all", "select_all_and_delete"):
+            method = getattr(node, method_name, None)
+            if callable(method):
+                method()
+                return
+        if not target_active or not target_active():
+            raise RuntimeError("JAB replacement requires exact foreground target")
+        # JABWrapper 2.0 exposes focus/insert but no replace API.
+        try:
+            import pyautogui
+
+            pyautogui.hotkey("ctrl", "a")
+            pyautogui.press("backspace")
+            return
+        except Exception as exc:
+            raise RuntimeError("JAB control cannot clear existing text") from exc
 
     def click(self, name: str) -> None:
         self._call(lambda wrapper: self._find_node(wrapper, "push button", name).click())

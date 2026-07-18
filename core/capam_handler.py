@@ -19,6 +19,7 @@ import pyautogui
 import cv2
 
 from adapters.base import OSAdapter
+from capture.window_capture import FrameCapture
 from recognition.geometry import boxes_stable
 from vision.field_detector import detect_input_fields
 from config import write_text_safely
@@ -45,6 +46,7 @@ class CAPAMHandler:
         self._screenshot_tmp = os.path.join(
             tempfile.gettempdir(), f"capam_crop_{os.getpid()}_{uuid.uuid4().hex}.png"
         )
+        self._capture = FrameCapture(adapter)
         self._jab = None
         self._jab_failed = False
         self._jab_attempts = 0
@@ -147,7 +149,10 @@ class CAPAMHandler:
                 ]
             self._invalidate_jab()
         try:
-            self.adapter.take_screenshot(rect, self._screenshot_tmp)
+            snapshot = self._capture.capture(rect)
+            if not snapshot:
+                return []
+            cv2.imwrite(self._screenshot_tmp, snapshot.image)
         except Exception:
             return []
         fields = detect_input_fields(
@@ -173,8 +178,8 @@ class CAPAMHandler:
             return fields
 
         try:
-            self.adapter.take_screenshot(rect, self._screenshot_tmp)
-            image = cv2.imread(self._screenshot_tmp)
+            snapshot = self._capture.capture(rect)
+            image = snapshot.image if snapshot else None
         except Exception:
             image = None
         finally:
@@ -241,33 +246,32 @@ class CAPAMHandler:
             poll_started = time.monotonic()
             rect = self.adapter.get_capam_main_rect()
             if rect:
+                if not self.adapter.is_foreground(rect):
+                    self.adapter.suppress_browser_foreground()
+                    self.adapter.wait_focus_rect(rect, timeout=2.0)
                 ratio = rect["h"] / rect["w"]
-                # Màn hình Address dẹt hơn (ratio ~0.45). Chỉ quét khi tỷ lệ nhỏ hơn 0.55
-                if ratio < 0.55 or (self._get_jab(rect) and self._get_jab(rect).has("combo box", "Address")):
-                    fields = self._detect_address_field(rect)
-                    if len(fields) >= 1:
-                        unchanged = (
-                            self._same_rect(previous_rect, rect)
-                            and boxes_stable(previous_fields, fields, rect["w"], rect["h"])
-                        )
-                        stable_count = stable_count + 1 if unchanged else 1
-                        previous_fields = fields
-                        previous_rect = rect.copy()
-                    else:
-                        stable_count = 0
-                        previous_fields = []
-                        previous_rect = None
-                    if stable_count >= _STABLE_DETECTIONS:
-                        elapsed = time.monotonic() - started
-                        self._log(
-                            f"[Address] Phát hiện {len(fields)} ô trên màn hình Address "
-                            f"ổn định sau {elapsed:.1f} giây (Ratio: {ratio:.3f})."
-                        )
-                        return rect, fields
+                fields = self._detect_address_field(rect)
+                if len(fields) == 1:
+                    frame_w = rect.get("client_rect", {}).get("w", rect["w"])
+                    frame_h = rect.get("client_rect", {}).get("h", rect["h"])
+                    unchanged = (
+                        self._same_rect(previous_rect, rect)
+                        and boxes_stable(previous_fields, fields, frame_w, frame_h)
+                    )
+                    stable_count = stable_count + 1 if unchanged else 1
+                    previous_fields = fields
+                    previous_rect = rect.copy()
                 else:
                     stable_count = 0
                     previous_fields = []
                     previous_rect = None
+                if stable_count >= _STABLE_DETECTIONS:
+                    elapsed = time.monotonic() - started
+                    self._log(
+                        f"[Address] Phát hiện unique Address ổn định sau {elapsed:.1f} giây "
+                        f"(Ratio prior: {ratio:.3f})."
+                    )
+                    return rect, fields
             elapsed = time.monotonic() - started
             self._log(f"Chờ màn hình Address CAPAM... ({elapsed:.1f}/{max_wait}s)")
             self._wait_next_poll(poll_started, deadline)
@@ -285,7 +289,12 @@ class CAPAMHandler:
         jab = self._get_jab(rect)
         if jab and jab.has("combo box", "Address"):
             try:
-                jab.set_combo_text("Address", self.capam_ip)
+                if not self.adapter.wait_focus_rect(rect, timeout=5.0):
+                    return False
+                jab.set_combo_text(
+                    "Address", self.capam_ip,
+                    target_active=lambda: self.adapter.is_foreground(rect),
+                )
                 jab.click("Connect")
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline:
@@ -320,10 +329,13 @@ class CAPAMHandler:
             self._log("[Address] Cửa sổ đã thay đổi kích thước hoặc instance; hủy thao tác cũ.")
             return False
         rect = current_rect
+        get_capture_rect = getattr(self.adapter, "get_capture_rect_for_hwnd", None)
+        image_rect = get_capture_rect(rect.get("id")) if get_capture_rect else None
+        image_rect = image_rect or rect
 
         x0, y0, w0, h0 = fields[0]
-        click_x = rect["x"] + x0 + w0 // 2
-        click_y = rect["y"] + y0 + h0 // 2
+        click_x = image_rect["x"] + x0 + w0 // 2
+        click_y = image_rect["y"] + y0 + h0 // 2
 
         self._log(f"[Address] Điền IP '{self.capam_ip}' vào ô tại ({click_x}, {click_y}).")
         pyautogui.click(click_x, click_y)
@@ -374,41 +386,39 @@ class CAPAMHandler:
             poll_started = time.monotonic()
             rect = self.adapter.get_capam_main_rect()
             if rect:
+                if not self.adapter.is_foreground(rect):
+                    self.adapter.suppress_browser_foreground()
+                    self.adapter.wait_focus_rect(rect, timeout=2.0)
                 ratio = rect["h"] / rect["w"]
-                # Màn hình Login cao hơn (ratio ~0.65). Chỉ chấp nhận khi tỷ lệ >= 0.55
-                if ratio >= 0.55 or (self._get_jab(rect) and self._get_jab(rect).has("text", "Username")):
-                    raw_fields = self._detect_fields(rect)
-                    min_width = max(_LOGIN_FIELD_MIN_WIDTH, rect["w"] * _LOGIN_FIELD_WIDTH_RATIO)
-                    fields = [field for field in raw_fields if field[2] >= min_width]
-                    if raw_fields and not fields:
-                        self._log(
-                            f"[Login] Có contour nhưng field quá hẹp: "
-                            f"{raw_fields}; đang chờ frame ổn định tiếp theo."
-                        )
-                    if len(fields) >= 1:
-                        unchanged = (
-                            self._same_rect(previous_rect, rect)
-                            and boxes_stable(previous_fields, fields, rect["w"], rect["h"])
-                        )
-                        stable_count = stable_count + 1 if unchanged else 1
-                        previous_fields = fields
-                        previous_rect = rect.copy()
-                    else:
-                        stable_count = 0
-                        previous_fields = []
-                        previous_rect = None
-                    if stable_count >= _STABLE_DETECTIONS:
-                        elapsed = time.monotonic() - started
-                        self._log(
-                            f"[Login] Màn hình đăng nhập ổn định - {len(fields)} ô nhập liệu "
-                            f"sau {elapsed:.1f} giây (Ratio: {ratio:.3f})."
-                        )
-                        return rect, fields
+                raw_fields = self._detect_fields(rect)
+                frame_w = rect.get("client_rect", {}).get("w", rect["w"])
+                frame_h = rect.get("client_rect", {}).get("h", rect["h"])
+                min_width = max(_LOGIN_FIELD_MIN_WIDTH, frame_w * _LOGIN_FIELD_WIDTH_RATIO)
+                fields = [field for field in raw_fields if field[2] >= min_width]
+                if raw_fields and not fields:
+                    self._log(
+                        f"[Login] Có contour nhưng field quá hẹp: "
+                        f"{raw_fields}; đang chờ frame ổn định tiếp theo."
+                    )
+                if len(fields) >= 1:
+                    unchanged = (
+                        self._same_rect(previous_rect, rect)
+                        and boxes_stable(previous_fields, fields, frame_w, frame_h)
+                    )
+                    stable_count = stable_count + 1 if unchanged else 1
+                    previous_fields = fields
+                    previous_rect = rect.copy()
                 else:
                     stable_count = 0
                     previous_fields = []
                     previous_rect = None
-                    self._log(f"Vẫn là màn hình Address (Ratio: {ratio:.3f}). Chờ tải màn hình Login...")
+                if stable_count >= _STABLE_DETECTIONS:
+                    elapsed = time.monotonic() - started
+                    self._log(
+                        f"[Login] Màn hình đăng nhập ổn định - {len(fields)} ô nhập liệu "
+                        f"sau {elapsed:.1f} giây (Ratio prior: {ratio:.3f})."
+                    )
+                    return rect, fields
             elapsed = time.monotonic() - started
             self._log(f"Chờ màn hình đăng nhập CAPAM... ({elapsed:.1f}/{max_wait}s)")
             self._wait_next_poll(poll_started, deadline)
@@ -426,8 +436,11 @@ class CAPAMHandler:
         jab = self._get_jab(rect)
         if jab and jab.has("text", "Username") and jab.has("password text", "Password"):
             try:
-                jab.set_text("text", "Username", username)
-                jab.set_text("password text", "Password", password)
+                if not self.adapter.wait_focus_rect(rect, timeout=5.0):
+                    return False
+                active = lambda: self.adapter.is_foreground(rect)
+                jab.set_text("text", "Username", username, target_active=active)
+                jab.set_text("password text", "Password", password, target_active=active)
                 jab.click("Login")
                 deadline = time.monotonic() + 20
                 device_list_title = (
@@ -462,11 +475,14 @@ class CAPAMHandler:
                 self._log("[Login] Cửa sổ đã thay đổi kích thước hoặc instance; hủy thao tác cũ.")
                 return False
             rect = current_rect
+            get_capture_rect = getattr(self.adapter, "get_capture_rect_for_hwnd", None)
+            image_rect = get_capture_rect(rect.get("id")) if get_capture_rect else None
+            image_rect = image_rect or rect
 
             x0, y0, w0, h0 = fields[0]
 
-            click_x0 = rect["x"] + x0 + w0 // 2
-            click_y0 = rect["y"] + y0 + h0 // 2
+            click_x0 = image_rect["x"] + x0 + w0 // 2
+            click_y0 = image_rect["y"] + y0 + h0 // 2
 
             # Username
             pyautogui.click(click_x0, click_y0)
@@ -515,17 +531,26 @@ class CAPAMHandler:
         return False
 
     def wait_for_login_success(self, max_wait: int = 20) -> bool:
-        """Verify that CAPAM login controls disappear after submission."""
+        """Verify a positive authenticated state; absence/capture failure is not success."""
         deadline = time.monotonic() + max_wait
         stable_count = 0
+        device_list_title = (
+            f"Symantec Privileged Access Manager Client - {self.capam_ip}"
+        )
         while time.monotonic() < deadline:
             if self._cancelled():
                 return False
+            if self.adapter.get_window_rect(device_list_title, exact=True):
+                self._log("[Login] Đã xác minh Device List sau đăng nhập CAPAM.")
+                return True
             rect = self.adapter.get_capam_main_rect()
             if not rect:
-                return True
+                stable_count = 0
+                time.sleep(_POLL_INTERVAL)
+                continue
             fields = self._detect_fields(rect)
-            if len(fields) == 0:
+            snapshot = self._capture.capture(rect)
+            if snapshot and not snapshot.is_blank and len(fields) == 0:
                 stable_count += 1
                 if stable_count >= _STABLE_DETECTIONS:
                     return True
