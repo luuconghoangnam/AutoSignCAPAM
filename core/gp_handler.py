@@ -165,12 +165,25 @@ class GPHandler:
         return STATE_UNKNOWN
 
     def detect_fields(self, rect: dict) -> list:
-        """Chụp cửa sổ GP và phát hiện các ô nhập liệu bằng OpenCV."""
+        """Chụp cửa sổ GP và phát hiện các ô nhập liệu bằng OpenCV template matching hoặc Canny edge."""
         self._last_capture_rect = None
         snapshot = self._capture.capture(rect)
         if not snapshot or snapshot.is_blank:
             return []
         self._last_capture_rect = snapshot.rect.copy()
+
+        # 1. Thử dùng template matching trước
+        try:
+            from vision.template_matcher import find_gp_fields_by_template
+            fields = find_gp_fields_by_template(snapshot.image, log_fn=self._log)
+            if fields:
+                self._log("[GP] Phát hiện ô nhập liệu thành công bằng Template Matching.")
+                return fields
+        except Exception as e:
+            self._log(f"[GP] Lỗi khi chạy Template Matching: {e}")
+
+        # 2. Fallback sang OpenCV Canny Edge
+        self._log("[GP] Không dùng được Template Matching. Fallback sang OpenCV Canny Contour...")
         try:
             import cv2
 
@@ -347,22 +360,28 @@ class GPHandler:
 
         pyautogui.moveTo(click_x0, click_y0, duration=0.25)
         pyautogui.click()
-        time.sleep(0.4)
+        time.sleep(0.2)
         if not self.adapter.is_foreground(rect):
             return False
         pyautogui.hotkey("ctrl", "a")
+        time.sleep(0.1)
         pyautogui.press("backspace")
+        time.sleep(0.1)
         if not write_text_safely(username, lambda: self.adapter.is_foreground(rect)):
             return False
+        time.sleep(0.2)
         pyautogui.moveTo(click_x1, click_y1, duration=0.25)
         pyautogui.click()
-        time.sleep(0.4)
+        time.sleep(0.2)
         if not self.adapter.is_foreground(rect):
             return False
         pyautogui.hotkey("ctrl", "a")
+        time.sleep(0.1)
         pyautogui.press("backspace")
+        time.sleep(0.1)
         if not write_text_safely(password, lambda: self.adapter.is_foreground(rect)):
             return False
+        time.sleep(0.2)
         return self.adapter.is_foreground(rect)
 
     def submit_credentials(self, rect: dict) -> bool:

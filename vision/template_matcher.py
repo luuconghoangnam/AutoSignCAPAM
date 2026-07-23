@@ -180,3 +180,82 @@ def find_device_rdp_button(
             "scale": float(matched_scale),
         }
     return click_x, click_y
+
+
+def find_gp_fields_by_template(scene: np.ndarray, log_fn=None) -> list | None:
+    """Tìm ô nhập liệu của GlobalProtect bằng template matching trên các nhãn chữ (labels).
+
+    Hỗ trợ cả màn hình nhập Portal (1 ô) và màn hình nhập Credentials (2 ô),
+    không bị ảnh hưởng khi ô nhập liệu đã có sẵn text.
+
+    Args:
+        scene: Ảnh chụp màn hình GlobalProtect dạng numpy array (BGR).
+        log_fn: Hàm callback để ghi log (tùy chọn).
+
+    Returns:
+        List tọa độ ô nhập liệu [(x, y, w, h), ...] hoặc None.
+    """
+    def _log(msg):
+        if log_fn:
+            log_fn(msg)
+
+    lbl_portal_path = get_resource_path("template_gp_lbl_portal.png")
+    lbl_user_path = get_resource_path("template_gp_lbl_user.png")
+    lbl_pass_path = get_resource_path("template_gp_lbl_pass.png")
+
+    lbl_portal = _get_template(lbl_portal_path)
+    lbl_user = _get_template(lbl_user_path)
+    lbl_pass = _get_template(lbl_pass_path)
+
+    if scene is None:
+        _log("Không có ảnh màn hình đầu vào.")
+        return None
+
+    gray_scene = cv2.cvtColor(scene, cv2.COLOR_BGR2GRAY)
+
+    # Tự động phát hiện và xử lý giao diện Dark Mode / Độ tương phản cao
+    mean_brightness = np.mean(gray_scene)
+    if mean_brightness < 120:
+        _log(f"[GP] Phát hiện giao diện Dark Mode (Độ sáng TB: {mean_brightness:.1f}). Tiến hành đảo màu...")
+        gray_scene = cv2.bitwise_not(gray_scene)
+
+    # 1. Thử khớp màn hình Portal trước
+    if lbl_portal is not None:
+        portal_match = _best_match(gray_scene, lbl_portal)
+        if portal_match and portal_match[0] >= 0.8:
+            score, loc, _, scale = portal_match
+            _log(f"[GP] Khớp nhãn Portal (Độ tin cậy: {score:.2f}, Scale: {scale:.2f})")
+            lx, ly = loc
+            # Tính toán vị trí ô nhập Portal relative với nhãn (ở scale 100%: y_offset=23, w=218, h=30)
+            input_x = lx
+            input_y = ly + int(23 * scale)
+            input_w = int(218 * scale)
+            input_h = int(30 * scale)
+            return [(input_x, input_y, input_w, input_h)]
+
+    # 2. Thử khớp màn hình Credentials (cần khớp cả Username và Password)
+    if lbl_user is not None and lbl_pass is not None:
+        user_match = _best_match(gray_scene, lbl_user)
+        pass_match = _best_match(gray_scene, lbl_pass)
+
+        user_ok = user_match and user_match[0] >= 0.8
+        pass_ok = pass_match and pass_match[0] >= 0.8
+
+        if user_ok and pass_ok:
+            u_score, u_loc, _, u_scale = user_match
+            p_score, p_loc, _, p_scale = pass_match
+            _log(f"[GP] Khớp nhãn Credentials (Username={u_score:.2f}, Password={p_score:.2f})")
+
+            # Username input field: y_offset_top = 27, w = 218, h = 30
+            ux, uy = u_loc
+            user_input = (ux, uy + int(27 * u_scale), int(218 * u_scale), int(30 * u_scale))
+
+            # Password input field: y_offset_top = 29, w = 218, h = 30
+            px, py = p_loc
+            pass_input = (px, py + int(29 * p_scale), int(218 * p_scale), int(30 * p_scale))
+
+            return [user_input, pass_input]
+
+    _log("[GP] Không nhận diện được nhãn Portal hoặc Credentials qua template matching.")
+    return None
+

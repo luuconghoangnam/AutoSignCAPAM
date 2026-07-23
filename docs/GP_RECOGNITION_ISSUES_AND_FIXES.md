@@ -123,11 +123,11 @@ Tương tự như cách dự án đang dùng `template_200.png` và `template_rd
 
 ## 📋 3. Check-list Các Việc Cần Làm Khi Chuyển Sang Máy Windows
 
-- [ ] **Bước 1**: Mở `config.py` và sửa delay của `write_text_safely` từ `0.05` -> `0.15`.
-- [ ] **Bước 2**: Mở `core/gp_handler.py` và bổ sung thêm các dòng `time.sleep(0.15)` - `time.sleep(0.2)` giữa các bước Click & gõ phím.
-- [ ] **Bước 3**: Chụp ảnh màn hình cửa sổ GlobalProtect thực tế trên máy Windows, cắt riêng ô nhập liệu và lưu thành `template_gp_user.png` / `template_gp_pass.png`.
-- [ ] **Bước 4**: Thêm bước Template Matching vào `GPHandler.enter_credentials()` trước khi fallback sang OpenCV Contour.
-- [ ] **Bước 5**: Chạy thử `python main.py` kiểm tra độ mượt và chính xác khi đăng nhập GP.
+- [x] **Bước 1**: Mở `config.py` và sửa delay của `write_text_safely` từ `0.05` -> `0.15`.
+- [x] **Bước 2**: Mở `core/gp_handler.py` và bổ sung thêm các dòng `time.sleep(0.15)` - `time.sleep(0.2)` giữa các bước Click & gõ phím.
+- [x] **Bước 3**: Chụp ảnh màn hình cửa sổ GlobalProtect thực tế trên máy Windows, cắt riêng ô nhập liệu và lưu thành `template_gp_user.png` / `template_gp_pass.png`.
+- [x] **Bước 4**: Thêm bước Template Matching vào `GPHandler.enter_credentials()` trước khi fallback sang OpenCV Contour.
+- [x] **Bước 5**: Chạy thử `python main.py` kiểm tra độ mượt và chính xác khi đăng nhập GP.
 
 ---
 > 📌 *Tài liệu được khởi tạo tự động để hỗ trợ chuyển giao mã nguồn sang môi trường máy làm việc Windows.*

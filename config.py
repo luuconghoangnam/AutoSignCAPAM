@@ -55,16 +55,16 @@ def write_text_safely(text: str, target_active=None) -> bool:
 
     try:
         pyperclip.copy(text)
-        time.sleep(0.05)
+        time.sleep(0.15)
         if target_active and not target_active():
             return False
         pyautogui.hotkey("ctrl", "v")
-        time.sleep(0.05)
+        time.sleep(0.15)
     except Exception:
         # Fallback trong trường hợp clipboard bị lỗi/chặn
         if target_active and not target_active():
             return False
-        pyautogui.write(text, interval=0.03)
+        pyautogui.write(text, interval=0.05)
     finally:
         # Khôi phục lại clipboard cũ của người dùng
         try:
